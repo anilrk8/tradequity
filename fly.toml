@@ -1,0 +1,28 @@
+app = "tradequity"
+primary_region = "bom"   # Mumbai — closest to India
+
+[build]
+
+[env]
+  DB_PATH = "/data/stocks.db"
+
+[http_service]
+  internal_port = 8501
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[mounts]]
+  source = "tradequity_data"
+  destination = "/data"
