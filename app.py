@@ -19,7 +19,8 @@ import streamlit as st
 
 from src.analyzer import (
     best_windows_for_stock, seasonal_analysis, sector_seasonal_analysis, universe_screener,
-    monthly_return_heatmap, excess_return_vs_nifty, sector_rotation_analysis, mae_analysis,
+    monthly_return_heatmap, excess_return_vs_nifty, sector_rotation_analysis,
+    mae_analysis, stop_loss_survival,
 )
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
@@ -1075,16 +1076,18 @@ def _render_mae_analysis():
         if mae_df is None:
             _no_data_warning()
         else:
-            st.session_state["mae_df"]          = mae_df
-            st.session_state["_res_mae_symbol"] = symbol
-            st.session_state["_res_mae_sm"]     = sm
-            st.session_state["_res_mae_sd"]     = sd
-            st.session_state["_res_mae_hold"]   = holding_days
+            st.session_state["mae_df"]           = mae_df
+            st.session_state["mae_survival_df"]  = stop_loss_survival(mae_df)
+            st.session_state["_res_mae_symbol"]  = symbol
+            st.session_state["_res_mae_sm"]      = sm
+            st.session_state["_res_mae_sd"]      = sd
+            st.session_state["_res_mae_hold"]    = holding_days
 
     if "mae_df" not in st.session_state:
         return
 
     mae_df       = st.session_state["mae_df"]
+    survival_df  = st.session_state.get("mae_survival_df")
     symbol       = st.session_state["_res_mae_symbol"]
     sm           = st.session_state["_res_mae_sm"]
     sd           = st.session_state["_res_mae_sd"]
@@ -1098,26 +1101,74 @@ def _render_mae_analysis():
     valid_mae = mae_df["MAE % (worst intraday dip)"].dropna()
     valid_mfe = mae_df["MFE % (best intraday peak)"].dropna()
 
-    # Suggested stop: 25th-percentile MAE (most adverse quarter of years) × 1.2 cushion
-    suggested_sl = round(float(valid_mae.quantile(0.25)) * 1.2, 1) if len(valid_mae) > 0 else None
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Avg MAE",     f"{valid_mae.mean():+.2f}%" if len(valid_mae) > 0 else "—",
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Avg MAE",   f"{valid_mae.mean():+.2f}%" if len(valid_mae) > 0 else "—",
               help="Average deepest intraday dip from entry across all years")
-    c2.metric("Worst MAE",   f"{valid_mae.min():+.2f}%"  if len(valid_mae) > 0 else "—",
+    c2.metric("Worst MAE", f"{valid_mae.min():+.2f}%"  if len(valid_mae) > 0 else "—",
               help="Single worst intraday dip from entry across all history")
-    c3.metric("Suggested SL",
-              f"{suggested_sl:+.1f}%" if suggested_sl is not None else "—",
-              help="25th-pct MAE × 1.2 — tight enough to cut losses, "
-                   "wide enough not to get stopped on normal noise")
-    c4.metric("Avg MFE",     f"{valid_mfe.mean():+.2f}%" if len(valid_mfe) > 0 else "—",
+    c3.metric("Avg MFE",   f"{valid_mfe.mean():+.2f}%" if len(valid_mfe) > 0 else "—",
               help="Average highest intraday peak reached during the window")
 
     st.divider()
 
-    t1, t2, t3 = st.tabs(["MAE by Year", "MAE vs Final Return", "Raw Data"])
+    t1, t2, t3, t4 = st.tabs(["🎯 Stop-Loss Survival", "📊 MAE by Year", "🔵 MAE vs Final Return", "🗃 Raw Data"])
 
     with t1:
+        st.caption(
+            "At each stop-loss level, how many trades survive — and crucially, "
+            "how many **winning trades** are preserved?  "
+            "The sweet spot: a stop where losers start getting cut while winners are still left intact."
+        )
+        if survival_df is None or survival_df.empty:
+            st.warning("No survival data available.")
+        else:
+            fig_surv = go.Figure()
+            fig_surv.add_trace(go.Scatter(
+                x=survival_df["Stop Level %"],
+                y=survival_df["Winner Preservation %"],
+                mode="lines+markers",
+                name="Winner Preservation %",
+                line=dict(color="#27ae60", width=2),
+                marker=dict(size=4),
+            ))
+            fig_surv.add_trace(go.Scatter(
+                x=survival_df["Stop Level %"],
+                y=survival_df["Survival Rate %"],
+                mode="lines+markers",
+                name="Overall Survival Rate %",
+                line=dict(color="#2980b9", width=2, dash="dash"),
+                marker=dict(size=4),
+            ))
+            fig_surv.add_hline(
+                y=80,
+                line_dash="dot", line_color="#e74c3c",
+                annotation_text="80% winner preservation threshold",
+                annotation_position="bottom right",
+            )
+            fig_surv.update_layout(
+                title=f"{sym_name} — Stop-Loss Survival Analysis  ·  {win_label}",
+                xaxis_title="Stop-Loss Level (%)",
+                yaxis_title="% of Trades",
+                yaxis=dict(range=[0, 105]),
+                height=430,
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                legend=dict(x=0.01, y=0.05),
+            )
+            st.plotly_chart(fig_surv, use_container_width=True)
+
+            summary_levels = [round(-x * 2.0, 1) for x in range(1, 16)]  # -2% to -30% in 2% steps
+            summary = survival_df[survival_df["Stop Level %"].isin(summary_levels)][
+                ["Stop Level %", "Trades Stopped", "Winners Stopped", "Losers Stopped",
+                 "Survival Rate %", "Winner Preservation %"]
+            ].reset_index(drop=True)
+            st.dataframe(summary.style.format({
+                "Stop Level %":          "{:.1f}%",
+                "Survival Rate %":       "{:.1f}%",
+                "Winner Preservation %": lambda x: f"{x:.1f}%" if pd.notna(x) else "—",
+            }), use_container_width=True)
+
+    with t2:
         bar_colors = [
             "#27ae60" if p else "#e74c3c"
             for p in mae_df["Profitable"]
@@ -1138,13 +1189,6 @@ def _render_mae_analysis():
                 annotation_text=f"Avg MAE: {valid_mae.mean():+.1f}%",
                 annotation_position="bottom right",
             )
-        if suggested_sl is not None:
-            fig.add_hline(
-                y=suggested_sl,
-                line_dash="dot", line_color="#9b59b6",
-                annotation_text=f"Suggested SL: {suggested_sl:+.1f}%",
-                annotation_position="bottom left",
-            )
         fig.update_layout(
             title=f"{sym_name} — MAE per Year  ·  {win_label}"
                   "  (green bar = trade ended profitable)",
@@ -1154,7 +1198,7 @@ def _render_mae_analysis():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    with t2:
+    with t3:
         st.caption(
             "Each dot = one year.  X = how far the trade went against you (MAE).  "
             "Y = where it ended up.  A cluster in top-left is ideal: small MAE, big gain."
@@ -1176,13 +1220,12 @@ def _render_mae_analysis():
         fig2.update_layout(height=430, plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig2, use_container_width=True)
 
-    with t3:
+    with t4:
         st.dataframe(
             mae_df.style.format({
                 "Final Return %":              "{:+.2f}%",
                 "MAE % (worst intraday dip)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
                 "MFE % (best intraday peak)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
-                "Risk/Reward (Final÷|MAE|)":   lambda x: f"{x:.2f}"   if pd.notna(x) else "—",
             }),
             use_container_width=True,
         )

@@ -574,9 +574,6 @@ def mae_analysis(
     MAE = deepest intraday low vs entry price (negative % = how far it dropped).
     MFE = highest intraday high vs entry price (positive % = best peak reached).
 
-    Useful for stop-loss calibration: if your stop is tighter than the typical
-    MAE, you'll get stopped out even on winning trades.
-
     Returns a DataFrame with one row per year.
     """
     conn = get_connection()
@@ -596,17 +593,62 @@ def mae_analysis(
         mae = r.get("mae_pct")
         mfe = r.get("mfe_pct")
         ret = r["return_pct"]
-        rr  = round(ret / abs(mae), 2) if (mae is not None and mae < 0) else None
         rows.append({
             "Year":                        r["year"],
             "Final Return %":              ret,
             "MAE % (worst intraday dip)":  mae,
             "MFE % (best intraday peak)":  mfe,
-            "Risk/Reward (Final÷|MAE|)":   rr,
             "Profitable":                  ret > 0,
         })
 
     if not rows:
         return None
+
+    return pd.DataFrame(rows)
+
+
+def stop_loss_survival(mae_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each candidate stop-loss level (0% to -30% in 0.5% steps), simulate
+    how many trades would have been stopped out and whether they were winners
+    or losers.
+
+    A trade is "stopped out" if its MAE went deeper than the stop level.
+
+    Returns a DataFrame with columns:
+        Stop Level %  — the stop being tested (e.g. -5.0)
+        Trades Stopped — total trades stopped out at this level
+        Winners Stopped — profitable trades that would have been cut early
+        Losers Stopped  — losing trades correctly cut
+        Winners Survived — profitable trades that weathered the drawdown
+        Total Trades    — total trades analysed
+        Survival Rate % — % of all trades that were NOT stopped out
+        Winner Preservation % — % of profitable trades that survived
+    """
+    total = len(mae_df)
+    profitable_mask = mae_df["Profitable"].fillna(False)
+    mae_vals = mae_df["MAE % (worst intraday dip)"].fillna(0)
+
+    rows = []
+    for stop in [round(-x * 0.5, 1) for x in range(1, 61)]:  # -0.5 to -30.0
+        stopped      = mae_vals < stop          # MAE went below this stop
+        survived     = ~stopped
+
+        winners_stopped  = int((stopped & profitable_mask).sum())
+        losers_stopped   = int((stopped & ~profitable_mask).sum())
+        winners_survived = int((survived & profitable_mask).sum())
+        total_stopped    = int(stopped.sum())
+        total_winners    = int(profitable_mask.sum())
+
+        rows.append({
+            "Stop Level %":          stop,
+            "Trades Stopped":        total_stopped,
+            "Winners Stopped":       winners_stopped,
+            "Losers Stopped":        losers_stopped,
+            "Winners Survived":      winners_survived,
+            "Total Trades":          total,
+            "Survival Rate %":       round((total - total_stopped) / total * 100, 1),
+            "Winner Preservation %": round(winners_survived / total_winners * 100, 1) if total_winners > 0 else None,
+        })
 
     return pd.DataFrame(rows)
