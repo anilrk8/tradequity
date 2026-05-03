@@ -25,7 +25,7 @@ from src.analyzer import (
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
     fetch_indices, get_index_status, has_index_data, INDEX_TICKERS,
-    fetch_custom_ticker, get_custom_tickers,
+    fetch_custom_ticker, get_custom_tickers, update_custom_tickers,
 )
 from src.universe import get_sectors, get_stocks, get_symbol_to_name
 from src.db import init_db
@@ -1419,6 +1419,29 @@ def tab_data_management():
                 use_container_width=True,
                 hide_index=True,
             )
+            ct_update_btn = st.button(
+                "🔄  Update Custom Tickers Only",
+                use_container_width=True,
+                key="ct_update",
+            )
+            if ct_update_btn:
+                ct_prog = st.progress(0.0, text="Updating custom tickers…")
+                ct_log_lines: list[str] = []
+                ct_log = st.empty()
+
+                def on_ct_progress(done: int, total: int, symbol: str, rows: int, status: str):
+                    ct_prog.progress(done / total, text=f"[{done}/{total}]  {symbol}")
+                    msg = (
+                        f"✓  {symbol}  — already up to date"
+                        if status == "already_up_to_date"
+                        else f"↓  {symbol}  — {rows} rows fetched"
+                    )
+                    ct_log_lines.append(msg)
+                    ct_log.text("\n".join(ct_log_lines))
+
+                update_custom_tickers(progress_callback=on_ct_progress)
+                ct_prog.progress(1.0, text="Complete ✓")
+                st.success("Custom tickers updated!")
         else:
             st.caption("No custom tickers added yet.")
 

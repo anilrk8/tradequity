@@ -223,6 +223,44 @@ def get_custom_tickers() -> list[dict]:
         conn.close()
 
 
+def update_custom_tickers(
+    progress_callback: Callable[[int, int, str, int, str], None] | None = None,
+) -> None:
+    """
+    Incrementally update all custom tickers to today.
+    Same logic as bulk_download but only for universe='CUSTOM' stocks.
+    progress_callback(done, total, symbol, rows_fetched, status)
+    """
+    custom = get_custom_tickers()
+    if not custom:
+        return
+
+    conn = get_connection()
+    total = len(custom)
+    end = date.today().strftime("%Y-%m-%d")
+
+    for i, entry in enumerate(custom):
+        symbol = entry["symbol"]
+        last = _last_stored_date(symbol, conn)
+        if last:
+            start = (
+                datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+        else:
+            start = START_DATE
+
+        if start > end:
+            rows, status = 0, "already_up_to_date"
+        else:
+            rows = fetch_symbol(symbol, start, end, conn)
+            status = "fetched"
+
+        if progress_callback:
+            progress_callback(i + 1, total, symbol, rows, status)
+
+    conn.close()
+
+
 def get_data_status(universe: str = "NIFTY50") -> pd.DataFrame:
     """Return a summary DataFrame showing data availability for every stock."""
     conn = get_connection()
