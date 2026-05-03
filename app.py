@@ -30,6 +30,11 @@ from src.fetcher import (
 from src.universe import get_sectors, get_stocks, get_symbol_to_name
 from src.db import init_db
 
+# ─── Feature flags ────────────────────────────────────────────────────────────
+# Set ENABLE_AI = False to hide the AI Commentary button entirely (e.g. on machines
+# without Ollama, or to quickly revert the feature without git changes).
+ENABLE_AI = True
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 UNIVERSE = "NIFTY500"
@@ -429,6 +434,44 @@ def tab_stock_analysis():
         display["return_pct"]  = display["return_pct"].apply(lambda x: f"{x:+.2f}%")
         display["target_met"]  = display["target_met"].map({True: "✓ Yes", False: "✗ No"})
         st.dataframe(display, use_container_width=True)
+
+    # ── AI Commentary ─────────────────────────────────────────────────────────
+    if ENABLE_AI:
+        st.divider()
+        if st.button("✨ Generate AI Commentary", key="sa_ai", use_container_width=False):
+            from src.llm import build_seasonal_prompt, stream_commentary
+
+            # Gather today's conditions from Similar Years session state if available
+            today_feats = None
+            sim_rows    = None
+            sim_res = st.session_state.get("sim_result")
+            if sim_res and not sim_res.get("missing_indices"):
+                today_feats = sim_res.get("today_features")
+                sim_df = sim_res.get("similar_years")
+                if sim_df is not None and not sim_df.empty:
+                    sim_rows = sim_df[["Year", "Final Return %"]].to_dict("records")
+
+            prompt = build_seasonal_prompt(
+                sym_name     = sym_name,
+                win_label    = win_label,
+                summary      = summary,
+                today_features = today_feats,
+                similar_years  = sim_rows,
+            )
+
+            with st.spinner("Mistral is thinking…"):
+                commentary_box = st.empty()
+                try:
+                    full_text = ""
+                    for chunk in stream_commentary(prompt):
+                        full_text += chunk
+                        commentary_box.markdown(
+                            f"> {full_text}▌",
+                            unsafe_allow_html=False,
+                        )
+                    commentary_box.markdown(f"> {full_text}")
+                except RuntimeError as e:
+                    st.error(str(e))
 
 
 # ─── Tab 2 — Sector Analysis ──────────────────────────────────────────────────
