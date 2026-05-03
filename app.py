@@ -448,62 +448,77 @@ def tab_sector_analysis():
             result_df = sector_seasonal_analysis(
                 chosen_sector, sm, sd, holding_days, min_return, UNIVERSE
             )
-
         if result_df is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["sec_result_df"]  = result_df
+            st.session_state["_res_sec_sector"] = chosen_sector
+            st.session_state["_res_sec_sm"]     = sm
+            st.session_state["_res_sec_sd"]     = sd
+            st.session_state["_res_sec_hold"]   = holding_days
+            st.session_state["_res_sec_minret"] = min_return
 
-        win_label = _window_label(sm, sd, holding_days)
-        st.divider()
-        st.markdown(
-            f"### {chosen_sector} Sector &nbsp;·&nbsp; {win_label}  ·  Target ≥{min_return:.0f}%"
-        )
+    if "sec_result_df" not in st.session_state:
+        return
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Stocks Analysed", len(result_df))
-        c2.metric("Avg Sector Return", f"{result_df['Avg Return %'].mean():+.2f}%")
-        best_row = result_df.iloc[0]
-        c3.metric(
-            "Top Stock (by target met)",
-            best_row["Symbol"],
-            delta=f"{best_row['Target Met (yrs)']} of {best_row['Out of (yrs)']} yrs",
-        )
-        avg_met_col = result_df["Avg When Target Met"].dropna()
-        c4.metric(
-            f"Avg return when ≥{min_return:.0f}%",
-            f"{avg_met_col.mean():+.2f}%" if len(avg_met_col) > 0 else "—",
-        )
+    result_df    = st.session_state["sec_result_df"]
+    chosen_sector = st.session_state["_res_sec_sector"]
+    sm           = st.session_state["_res_sec_sm"]
+    sd           = st.session_state["_res_sec_sd"]
+    holding_days = st.session_state["_res_sec_hold"]
+    min_return   = st.session_state["_res_sec_minret"]
 
-        st.divider()
+    win_label = _window_label(sm, sd, holding_days)
+    st.divider()
+    st.markdown(
+        f"### {chosen_sector} Sector &nbsp;·&nbsp; {win_label}  ·  Target ≥{min_return:.0f}%"
+    )
 
-        st.dataframe(
-            result_df.style
-                .background_gradient(
-                    subset=["Target Met (yrs)"], cmap="RdYlGn",
-                    vmin=0, vmax=result_df["Out of (yrs)"].max()
-                )
-                .background_gradient(subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20)
-                .format({
-                    "Avg Return %":        "{:+.2f}%",
-                    "Avg When Target Met": lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
-                    "Best Return %":       "{:+.2f}%",
-                    "Worst Return %":      "{:+.2f}%",
-                }),
-            use_container_width=True,
-        )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Stocks Analysed", len(result_df))
+    c2.metric("Avg Sector Return", f"{result_df['Avg Return %'].mean():+.2f}%")
+    best_row = result_df.iloc[0]
+    c3.metric(
+        "Top Stock (by target met)",
+        best_row["Symbol"],
+        delta=f"{best_row['Target Met (yrs)']} of {best_row['Out of (yrs)']} yrs",
+    )
+    avg_met_col = result_df["Avg When Target Met"].dropna()
+    c4.metric(
+        f"Avg return when ≥{min_return:.0f}%",
+        f"{avg_met_col.mean():+.2f}%" if len(avg_met_col) > 0 else "—",
+    )
 
-        fig = px.bar(
-            result_df, x="Symbol", y="Target Met (yrs)",
-            color="Target Met (yrs)",
-            color_continuous_scale="RdYlGn",
-            range_color=[0, result_df["Out of (yrs)"].max()],
-            title=f"{chosen_sector} — Years Target ≥{min_return:.0f}% Met  ·  {win_label}",
-            text="Target Met (yrs)",
-        )
-        fig.update_traces(texttemplate="%{text}", textposition="outside")
-        fig.update_layout(height=420, plot_bgcolor="white", paper_bgcolor="white",
-                          xaxis_tickangle=-30)
-        st.plotly_chart(fig, use_container_width=True)
+    st.divider()
+
+    st.dataframe(
+        result_df.style
+            .background_gradient(
+                subset=["Target Met (yrs)"], cmap="RdYlGn",
+                vmin=0, vmax=result_df["Out of (yrs)"].max()
+            )
+            .background_gradient(subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20)
+            .format({
+                "Avg Return %":        "{:+.2f}%",
+                "Avg When Target Met": lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
+                "Best Return %":       "{:+.2f}%",
+                "Worst Return %":      "{:+.2f}%",
+            }),
+        use_container_width=True,
+    )
+
+    fig = px.bar(
+        result_df, x="Symbol", y="Target Met (yrs)",
+        color="Target Met (yrs)",
+        color_continuous_scale="RdYlGn",
+        range_color=[0, result_df["Out of (yrs)"].max()],
+        title=f"{chosen_sector} — Years Target ≥{min_return:.0f}% Met  ·  {win_label}",
+        text="Target Met (yrs)",
+    )
+    fig.update_traces(texttemplate="%{text}", textposition="outside")
+    fig.update_layout(height=420, plot_bgcolor="white", paper_bgcolor="white",
+                      xaxis_tickangle=-30)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ─── Tab 3 — Best Windows ─────────────────────────────────────────────────────
@@ -532,58 +547,70 @@ def _render_stock_best_windows():
         sym_name = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
         with st.spinner(f"Scanning {sym_name}…"):
             result_df = best_windows_for_stock(symbol, int(holding_days), float(min_return))
-
         if result_df is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["bw_result_df"]   = result_df
+            st.session_state["_res_bw_symbol"] = symbol
+            st.session_state["_res_bw_hold"]   = holding_days
+            st.session_state["_res_bw_minret"] = min_return
 
-        st.divider()
-        st.markdown(
-            f"### {sym_name} — Best Windows  ·  +{holding_days} days hold  ·  "
-            f"Target ≥{min_return:.0f}%"
+    if "bw_result_df" not in st.session_state:
+        return
+
+    result_df    = st.session_state["bw_result_df"]
+    symbol       = st.session_state["_res_bw_symbol"]
+    holding_days = st.session_state["_res_bw_hold"]
+    min_return   = st.session_state["_res_bw_minret"]
+    sym_name     = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+
+    st.divider()
+    st.markdown(
+        f"### {sym_name} — Best Windows  ·  +{holding_days} days hold  ·  "
+        f"Target ≥{min_return:.0f}%"
+    )
+
+    top3 = result_df.head(3)
+    medals = ["🥇", "🥈", "🥉"]
+    cols = st.columns(3)
+    for i, (col, (_, row)) in enumerate(zip(cols, top3.iterrows())):
+        col.metric(
+            f"{medals[i]} {row['Window']}",
+            f"{row['Target Met (yrs)']} of {row['Out of (yrs)']} years",
+            delta=f"Avg {row['Avg Return %']:+.2f}%",
         )
 
-        top3 = result_df.head(3)
-        medals = ["🥇", "🥈", "🥉"]
-        cols = st.columns(3)
-        for i, (col, (_, row)) in enumerate(zip(cols, top3.iterrows())):
-            col.metric(
-                f"{medals[i]} {row['Window']}",
-                f"{row['Target Met (yrs)']} of {row['Out of (yrs)']} years",
-                delta=f"Avg {row['Avg Return %']:+.2f}%",
+    st.divider()
+
+    st.dataframe(
+        result_df.style
+            .background_gradient(
+                subset=["Target Met (yrs)"], cmap="RdYlGn",
+                vmin=0, vmax=result_df["Out of (yrs)"].max()
             )
+            .background_gradient(subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20)
+            .format({
+                "Avg Return %":   "{:+.2f}%",
+                "Best Return %":  "{:+.2f}%",
+                "Worst Return %": "{:+.2f}%",
+            }),
+        use_container_width=True,
+    )
 
-        st.divider()
-
-        st.dataframe(
-            result_df.style
-                .background_gradient(
-                    subset=["Target Met (yrs)"], cmap="RdYlGn",
-                    vmin=0, vmax=result_df["Out of (yrs)"].max()
-                )
-                .background_gradient(subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20)
-                .format({
-                    "Avg Return %":   "{:+.2f}%",
-                    "Best Return %":  "{:+.2f}%",
-                    "Worst Return %": "{:+.2f}%",
-                }),
-            use_container_width=True,
-        )
-
-        fig = px.bar(
-            result_df, x="Window", y="Target Met (yrs)",
-            color="Target Met (yrs)",
-            color_continuous_scale="RdYlGn",
-            range_color=[0, result_df["Out of (yrs)"].max()],
-            title=f"{sym_name} — Years Target ≥{min_return:.0f}% Met, by Entry Month",
-            text="Target Met (yrs)",
-        )
-        fig.update_traces(texttemplate="%{text}", textposition="outside")
-        fig.update_layout(
-            height=420, xaxis_tickangle=-30,
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        result_df, x="Window", y="Target Met (yrs)",
+        color="Target Met (yrs)",
+        color_continuous_scale="RdYlGn",
+        range_color=[0, result_df["Out of (yrs)"].max()],
+        title=f"{sym_name} — Years Target ≥{min_return:.0f}% Met, by Entry Month",
+        text="Target Met (yrs)",
+    )
+    fig.update_traces(texttemplate="%{text}", textposition="outside")
+    fig.update_layout(
+        height=420, xaxis_tickangle=-30,
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_window_best_stocks():
@@ -598,71 +625,84 @@ def _render_window_best_stocks():
         win_label = _window_label(sm, sd, holding_days)
         with st.spinner(f"Scanning all {UNIVERSE} stocks for {win_label}…"):
             result_df = universe_screener(sm, sd, holding_days, min_return, UNIVERSE)
-
         if result_df is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["ws_result_df"]   = result_df
+            st.session_state["_res_ws_sm"]     = sm
+            st.session_state["_res_ws_sd"]     = sd
+            st.session_state["_res_ws_hold"]   = holding_days
+            st.session_state["_res_ws_minret"] = min_return
 
-        st.divider()
-        st.markdown(f"### All Stocks · {win_label}  ·  Target ≥{min_return:.0f}%")
+    if "ws_result_df" not in st.session_state:
+        return
 
-        max_met = result_df["Out of (yrs)"].max()
-        top3 = result_df.head(3)
-        medals = ["🥇", "🥈", "🥉"]
-        cols = st.columns(3)
-        for i, (col, (_, row)) in enumerate(zip(cols, top3.iterrows())):
-            col.metric(
-                f"{medals[i]} {row['Name']}  ({row['Symbol']})",
-                f"{row['Target Met (yrs)']} of {row['Out of (yrs)']} years met",
-                delta=f"Avg {row['Avg Return %']:+.2f}%",
+    result_df    = st.session_state["ws_result_df"]
+    sm           = st.session_state["_res_ws_sm"]
+    sd           = st.session_state["_res_ws_sd"]
+    holding_days = st.session_state["_res_ws_hold"]
+    min_return   = st.session_state["_res_ws_minret"]
+    win_label    = _window_label(sm, sd, holding_days)
+
+    st.divider()
+    st.markdown(f"### All Stocks · {win_label}  ·  Target ≥{min_return:.0f}%")
+
+    max_met = result_df["Out of (yrs)"].max()
+    top3 = result_df.head(3)
+    medals = ["🥇", "🥈", "🥉"]
+    cols = st.columns(3)
+    for i, (col, (_, row)) in enumerate(zip(cols, top3.iterrows())):
+        col.metric(
+            f"{medals[i]} {row['Name']}  ({row['Symbol']})",
+            f"{row['Target Met (yrs)']} of {row['Out of (yrs)']} years met",
+            delta=f"Avg {row['Avg Return %']:+.2f}%",
+        )
+
+    st.divider()
+
+    all_sectors = sorted(result_df["Sector"].unique().tolist())
+    chosen = st.multiselect(
+        "Filter by Sector (leave empty = show all)",
+        options=all_sectors,
+        default=[],
+        key="ws_sector_filter",
+    )
+    display_df = result_df[result_df["Sector"].isin(chosen)] if chosen else result_df
+
+    st.dataframe(
+        display_df.style
+            .background_gradient(
+                subset=["Target Met (yrs)"], cmap="RdYlGn",
+                vmin=0, vmax=max_met
             )
+            .background_gradient(
+                subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20
+            )
+            .format({
+                "Avg Return %":        "{:+.2f}%",
+                "Avg When Target Met": lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
+                "Best Return %":       "{:+.2f}%",
+                "Worst Return %":      "{:+.2f}%",
+            }),
+        use_container_width=True,
+        height=540,
+    )
 
-        st.divider()
-
-        # Optional sector filter
-        all_sectors = sorted(result_df["Sector"].unique().tolist())
-        chosen = st.multiselect(
-            "Filter by Sector (leave empty = show all)",
-            options=all_sectors,
-            default=[],
-            key="ws_sector_filter",
-        )
-        display_df = result_df[result_df["Sector"].isin(chosen)] if chosen else result_df
-
-        st.dataframe(
-            display_df.style
-                .background_gradient(
-                    subset=["Target Met (yrs)"], cmap="RdYlGn",
-                    vmin=0, vmax=max_met
-                )
-                .background_gradient(
-                    subset=["Avg Return %"], cmap="RdYlGn", vmin=-20, vmax=20
-                )
-                .format({
-                    "Avg Return %":        "{:+.2f}%",
-                    "Avg When Target Met": lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
-                    "Best Return %":       "{:+.2f}%",
-                    "Worst Return %":      "{:+.2f}%",
-                }),
-            use_container_width=True,
-            height=540,
-        )
-
-        fig = px.bar(
-            display_df, x="Symbol", y="Target Met (yrs)",
-            color="Target Met (yrs)",
-            color_continuous_scale="RdYlGn",
-            range_color=[0, max_met],
-            hover_data=["Name", "Sector", "Avg Return %"],
-            title=f"All Stocks — Years Target ≥{min_return:.0f}% Met  ·  {win_label}",
-            text="Target Met (yrs)",
-        )
-        fig.update_traces(texttemplate="%{text}", textposition="outside")
-        fig.update_layout(
-            height=460, xaxis_tickangle=-45,
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        display_df, x="Symbol", y="Target Met (yrs)",
+        color="Target Met (yrs)",
+        color_continuous_scale="RdYlGn",
+        range_color=[0, max_met],
+        hover_data=["Name", "Sector", "Avg Return %"],
+        title=f"All Stocks — Years Target ≥{min_return:.0f}% Met  ·  {win_label}",
+        text="Target Met (yrs)",
+    )
+    fig.update_traces(texttemplate="%{text}", textposition="outside")
+    fig.update_layout(
+        height=460, xaxis_tickangle=-45,
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def tab_best_windows():
@@ -686,81 +726,89 @@ def _render_monthly_heatmap():
         sym_name = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
         with st.spinner(f"Computing heatmap for {sym_name}…"):
             pivot = monthly_return_heatmap(symbol)
-
         if pivot is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["mh_pivot"]        = pivot
+            st.session_state["_res_mh_symbol"]  = symbol
 
-        st.divider()
-        st.markdown(f"### {sym_name} — Monthly Return Heatmap")
+    if "mh_pivot" not in st.session_state:
+        return
 
-        fig = px.imshow(
-            pivot,
-            color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-            aspect="auto",
-            text_auto=".1f",
-            title=f"{sym_name} — Monthly Return % (each cell = that month's closing return)",
-            labels={"x": "Month", "y": "Year", "color": "Return %"},
-        )
-        fig.update_layout(
-            height=max(420, len(pivot) * 25 + 120),
-            paper_bgcolor="white",
-            coloraxis_colorbar=dict(title="Return %"),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    pivot    = st.session_state["mh_pivot"]
+    symbol   = st.session_state["_res_mh_symbol"]
+    sym_name = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
 
-        st.divider()
-        st.markdown("#### Average Monthly Return  (all years combined)")
-        avg_by_month = pivot.mean(axis=0).reset_index()
-        avg_by_month.columns = ["Month", "Avg Return %"]
-        avg_by_month["Avg Return %"] = avg_by_month["Avg Return %"].round(2)
+    st.divider()
+    st.markdown(f"### {sym_name} — Monthly Return Heatmap")
 
-        colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in avg_by_month["Avg Return %"]]
-        fig2 = go.Figure(go.Bar(
-            x=avg_by_month["Month"],
-            y=avg_by_month["Avg Return %"],
-            marker_color=colors,
-            text=[f"{v:+.2f}%" for v in avg_by_month["Avg Return %"]],
+    fig = px.imshow(
+        pivot,
+        color_continuous_scale="RdYlGn",
+        color_continuous_midpoint=0,
+        aspect="auto",
+        text_auto=".1f",
+        title=f"{sym_name} — Monthly Return % (each cell = that month's closing return)",
+        labels={"x": "Month", "y": "Year", "color": "Return %"},
+    )
+    fig.update_layout(
+        height=max(420, len(pivot) * 25 + 120),
+        paper_bgcolor="white",
+        coloraxis_colorbar=dict(title="Return %"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    st.markdown("#### Average Monthly Return  (all years combined)")
+    avg_by_month = pivot.mean(axis=0).reset_index()
+    avg_by_month.columns = ["Month", "Avg Return %"]
+    avg_by_month["Avg Return %"] = avg_by_month["Avg Return %"].round(2)
+
+    colors = ["#27ae60" if v >= 0 else "#e74c3c" for v in avg_by_month["Avg Return %"]]
+    fig2 = go.Figure(go.Bar(
+        x=avg_by_month["Month"],
+        y=avg_by_month["Avg Return %"],
+        marker_color=colors,
+        text=[f"{v:+.2f}%" for v in avg_by_month["Avg Return %"]],
+        textposition="outside",
+    ))
+    fig2.add_hline(y=0, line_color="#333", line_width=1)
+    fig2.update_layout(
+        title=f"{sym_name} — Avg Return by Month (across all years)",
+        xaxis_title="Month", yaxis_title="Avg Return %",
+        height=380, plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    total_years = len(pivot)
+    pos_count = (pivot > 0).sum(axis=0).reset_index()
+    pos_count.columns = ["Month", "Positive Years"]
+    st.markdown(f"#### Consistency — how often each month closes positive  ({total_years} years total)")
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        fig3 = go.Figure(go.Bar(
+            x=pos_count["Month"],
+            y=pos_count["Positive Years"],
+            marker_color=[
+                "#27ae60" if v >= total_years * 0.6
+                else ("#e67e22" if v >= total_years * 0.4 else "#e74c3c")
+                for v in pos_count["Positive Years"]
+            ],
+            text=[f"{v}/{total_years}" for v in pos_count["Positive Years"]],
             textposition="outside",
         ))
-        fig2.add_hline(y=0, line_color="#333", line_width=1)
-        fig2.update_layout(
-            title=f"{sym_name} — Avg Return by Month (across all years)",
-            xaxis_title="Month", yaxis_title="Avg Return %",
-            height=380, plot_bgcolor="white", paper_bgcolor="white",
+        fig3.update_layout(
+            title="Positive closes per month",
+            height=340, plot_bgcolor="white", paper_bgcolor="white",
         )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        total_years = len(pivot)
-        pos_count = (pivot > 0).sum(axis=0).reset_index()
-        pos_count.columns = ["Month", "Positive Years"]
-        st.markdown(f"#### Consistency — how often each month closes positive  ({total_years} years total)")
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            fig3 = go.Figure(go.Bar(
-                x=pos_count["Month"],
-                y=pos_count["Positive Years"],
-                marker_color=[
-                    "#27ae60" if v >= total_years * 0.6
-                    else ("#e67e22" if v >= total_years * 0.4 else "#e74c3c")
-                    for v in pos_count["Positive Years"]
-                ],
-                text=[f"{v}/{total_years}" for v in pos_count["Positive Years"]],
-                textposition="outside",
-            ))
-            fig3.update_layout(
-                title="Positive closes per month",
-                height=340, plot_bgcolor="white", paper_bgcolor="white",
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-        with c2:
-            st.dataframe(
-                pos_count.assign(**{
-                    "% Positive": (pos_count["Positive Years"] / total_years * 100).round(1)
-                }),
-                use_container_width=True,
-            )
+        st.plotly_chart(fig3, use_container_width=True)
+    with c2:
+        st.dataframe(
+            pos_count.assign(**{
+                "% Positive": (pos_count["Positive Years"] / total_years * 100).round(1)
+            }),
+            use_container_width=True,
+        )
 
 
 def _render_excess_vs_nifty():
@@ -788,131 +836,150 @@ def _render_excess_vs_nifty():
         win_label = _window_label(sm, sd, holding_days)
         with st.spinner(f"Comparing {sym_name} vs NIFTY for {win_label}…"):
             results_df, summary = excess_return_vs_nifty(symbol, sm, sd, holding_days, min_return)
-
         if results_df is None:
             _no_data_warning()
-            return
-
-        st.divider()
-        st.markdown(f"### {sym_name} vs NIFTY 50  ·  {win_label}")
-
-        n_avail = summary["nifty_available"]
-        v_avail = summary["vix_available"]
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Avg Stock Return", f"{summary['avg_stock_return']:+.2f}%")
-        if n_avail:
-            c2.metric("Avg NIFTY Return",  f"{summary['avg_nifty_return']:+.2f}%")
-            c3.metric(
-                "Avg Excess Return",
-                f"{summary['avg_excess_return']:+.2f}%" if summary["avg_excess_return"] is not None else "—",
-                help="Stock return minus NIFTY return over the same window",
-            )
-            c4.metric("Beat NIFTY", summary["beat_index_label"])
         else:
-            c2.metric("NIFTY Data", "Not downloaded")
-            c3.metric("→ See", "Data Management")
-            c4.metric("", "")
+            st.session_state["ev_results_df"]  = results_df
+            st.session_state["ev_summary"]     = summary
+            st.session_state["_res_ev_symbol"] = symbol
+            st.session_state["_res_ev_sm"]     = sm
+            st.session_state["_res_ev_sd"]     = sd
+            st.session_state["_res_ev_hold"]   = holding_days
+            st.session_state["_res_ev_minret"] = min_return
 
-        st.divider()
+    if "ev_results_df" not in st.session_state:
+        return
 
-        if n_avail:
-            # Grouped bar: stock vs NIFTY per year
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=results_df["year"].astype(str),
-                y=results_df["stock_return"],
-                name=sym_name,
-                marker_color="#2980b9",
-                offsetgroup=0,
-            ))
-            fig.add_trace(go.Bar(
-                x=results_df["year"].astype(str),
-                y=results_df["nifty_return"],
-                name="NIFTY 50",
-                marker_color="#bdc3c7",
-                offsetgroup=1,
-            ))
-            fig.add_hline(y=0, line_color="#333", line_width=1)
-            fig.update_layout(
-                title=f"{sym_name} vs NIFTY 50 — Annual Window Returns  ·  {win_label}",
-                barmode="group",
-                xaxis_title="Year", yaxis_title="Return %",
-                height=420, plot_bgcolor="white", paper_bgcolor="white",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-                xaxis_tickangle=-45,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    results_df   = st.session_state["ev_results_df"]
+    summary      = st.session_state["ev_summary"]
+    symbol       = st.session_state["_res_ev_symbol"]
+    sm           = st.session_state["_res_ev_sm"]
+    sd           = st.session_state["_res_ev_sd"]
+    holding_days = st.session_state["_res_ev_hold"]
+    min_return   = st.session_state["_res_ev_minret"]
+    sym_name     = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+    win_label    = _window_label(sm, sd, holding_days)
 
-            # Excess return bar
-            exc = results_df.dropna(subset=["excess_return"])
-            exc_colors = ["#27ae60" if v > 0 else "#e74c3c" for v in exc["excess_return"]]
-            fig2 = go.Figure(go.Bar(
-                x=exc["year"].astype(str),
-                y=exc["excess_return"],
-                marker_color=exc_colors,
-                text=[f"{v:+.1f}%" for v in exc["excess_return"]],
-                textposition="outside",
-            ))
-            fig2.add_hline(y=0, line_color="#333", line_width=1)
-            if summary["avg_excess_return"] is not None:
-                fig2.add_hline(
-                    y=summary["avg_excess_return"],
-                    line_dash="dash", line_color="#9b59b6",
-                    annotation_text=f"Avg excess: {summary['avg_excess_return']:+.1f}%",
-                    annotation_position="top right",
-                )
-            fig2.update_layout(
-                title=f"Excess Return (Stock − NIFTY)  ·  {win_label}",
-                xaxis_title="Year", yaxis_title="Excess Return %",
-                height=380, plot_bgcolor="white", paper_bgcolor="white",
-                xaxis_tickangle=-45,
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+    st.divider()
+    st.markdown(f"### {sym_name} vs NIFTY 50  ·  {win_label}")
 
-        # VIX overlay
-        if v_avail and results_df["vix_at_entry"].notna().sum() >= 3:
-            st.divider()
-            st.markdown("#### India VIX at Entry vs Outcome")
-            st.caption(
-                "Each dot = one year.  X = VIX when you would have entered.  "
-                "Y = stock return.  High VIX (>20) is elevated-risk territory."
-            )
-            vix_data = results_df.dropna(subset=["vix_at_entry"]).copy()
-            fig3 = px.scatter(
-                vix_data,
-                x="vix_at_entry",
-                y="stock_return",
-                text="year",
-                color="stock_return",
-                color_continuous_scale="RdYlGn",
-                color_continuous_midpoint=0,
-                title=f"VIX at Entry vs Stock Return  ·  {win_label}",
-                labels={"vix_at_entry": "India VIX at Entry", "stock_return": "Stock Return %"},
-            )
-            fig3.update_traces(textposition="top center", marker_size=10)
-            fig3.add_vline(
-                x=20, line_dash="dash", line_color="#e74c3c",
-                annotation_text="VIX = 20  (elevated threshold)",
+    n_avail = summary["nifty_available"]
+    v_avail = summary["vix_available"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Avg Stock Return", f"{summary['avg_stock_return']:+.2f}%")
+    if n_avail:
+        c2.metric("Avg NIFTY Return",  f"{summary['avg_nifty_return']:+.2f}%")
+        c3.metric(
+            "Avg Excess Return",
+            f"{summary['avg_excess_return']:+.2f}%" if summary["avg_excess_return"] is not None else "—",
+            help="Stock return minus NIFTY return over the same window",
+        )
+        c4.metric("Beat NIFTY", summary["beat_index_label"])
+    else:
+        c2.metric("NIFTY Data", "Not downloaded")
+        c3.metric("→ See", "Data Management")
+        c4.metric("", "")
+
+    st.divider()
+
+    if n_avail:
+        # Grouped bar: stock vs NIFTY per year
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=results_df["year"].astype(str),
+            y=results_df["stock_return"],
+            name=sym_name,
+            marker_color="#2980b9",
+            offsetgroup=0,
+        ))
+        fig.add_trace(go.Bar(
+            x=results_df["year"].astype(str),
+            y=results_df["nifty_return"],
+            name="NIFTY 50",
+            marker_color="#bdc3c7",
+            offsetgroup=1,
+        ))
+        fig.add_hline(y=0, line_color="#333", line_width=1)
+        fig.update_layout(
+            title=f"{sym_name} vs NIFTY 50 — Annual Window Returns  ·  {win_label}",
+            barmode="group",
+            xaxis_title="Year", yaxis_title="Return %",
+            height=420, plot_bgcolor="white", paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            xaxis_tickangle=-45,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Excess return bar
+        exc = results_df.dropna(subset=["excess_return"])
+        exc_colors = ["#27ae60" if v > 0 else "#e74c3c" for v in exc["excess_return"]]
+        fig2 = go.Figure(go.Bar(
+            x=exc["year"].astype(str),
+            y=exc["excess_return"],
+            marker_color=exc_colors,
+            text=[f"{v:+.1f}%" for v in exc["excess_return"]],
+            textposition="outside",
+        ))
+        fig2.add_hline(y=0, line_color="#333", line_width=1)
+        if summary["avg_excess_return"] is not None:
+            fig2.add_hline(
+                y=summary["avg_excess_return"],
+                line_dash="dash", line_color="#9b59b6",
+                annotation_text=f"Avg excess: {summary['avg_excess_return']:+.1f}%",
                 annotation_position="top right",
             )
-            fig3.update_layout(height=430, plot_bgcolor="white", paper_bgcolor="white")
-            st.plotly_chart(fig3, use_container_width=True)
+        fig2.update_layout(
+            title=f"Excess Return (Stock − NIFTY)  ·  {win_label}",
+            xaxis_title="Year", yaxis_title="Excess Return %",
+            height=380, plot_bgcolor="white", paper_bgcolor="white",
+            xaxis_tickangle=-45,
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
-            # VIX regime summary
-            vix_data["vix_regime"] = pd.cut(
-                vix_data["vix_at_entry"],
-                bins=[0, 14, 20, 100],
-                labels=["Calm  (<14)", "Normal  (14–20)", "Elevated  (>20)"],
-            )
-            regime_tbl = (
-                vix_data.groupby("vix_regime", observed=True)["stock_return"]
-                .agg(Count="count", Avg_Return="mean", Min="min", Max="max")
-                .round(2)
-            )
-            regime_tbl.columns = ["Count", "Avg Return %", "Min %", "Max %"]
-            st.markdown("**Average outcome by VIX regime at entry**")
-            st.dataframe(regime_tbl, use_container_width=True)
+    # VIX overlay
+    if v_avail and results_df["vix_at_entry"].notna().sum() >= 3:
+        st.divider()
+        st.markdown("#### India VIX at Entry vs Outcome")
+        st.caption(
+            "Each dot = one year.  X = VIX when you would have entered.  "
+            "Y = stock return.  High VIX (>20) is elevated-risk territory."
+        )
+        vix_data = results_df.dropna(subset=["vix_at_entry"]).copy()
+        fig3 = px.scatter(
+            vix_data,
+            x="vix_at_entry",
+            y="stock_return",
+            text="year",
+            color="stock_return",
+            color_continuous_scale="RdYlGn",
+            color_continuous_midpoint=0,
+            title=f"VIX at Entry vs Stock Return  ·  {win_label}",
+            labels={"vix_at_entry": "India VIX at Entry", "stock_return": "Stock Return %"},
+        )
+        fig3.update_traces(textposition="top center", marker_size=10)
+        fig3.add_vline(
+            x=20, line_dash="dash", line_color="#e74c3c",
+            annotation_text="VIX = 20  (elevated threshold)",
+            annotation_position="top right",
+        )
+        fig3.update_layout(height=430, plot_bgcolor="white", paper_bgcolor="white")
+        st.plotly_chart(fig3, use_container_width=True)
+
+        # VIX regime summary
+        vix_data["vix_regime"] = pd.cut(
+            vix_data["vix_at_entry"],
+            bins=[0, 14, 20, 100],
+            labels=["Calm  (<14)", "Normal  (14–20)", "Elevated  (>20)"],
+        )
+        regime_tbl = (
+            vix_data.groupby("vix_regime", observed=True)["stock_return"]
+            .agg(Count="count", Avg_Return="mean", Min="min", Max="max")
+            .round(2)
+        )
+        regime_tbl.columns = ["Count", "Avg Return %", "Min %", "Max %"]
+        st.markdown("**Average outcome by VIX regime at entry**")
+        st.dataframe(regime_tbl, use_container_width=True)
 
 
 def _render_sector_rotation():
@@ -925,62 +992,67 @@ def _render_sector_rotation():
     if st.button("Compute Sector Rotation →", type="primary", key="sr_go"):
         with st.spinner("Scanning all sectors across all years — please wait…"):
             pivot = sector_rotation_analysis(UNIVERSE)
-
         if pivot is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["sr_pivot"] = pivot
 
-        st.divider()
-        st.markdown("### Sector Rotation — Monthly Return Heatmap")
-        st.caption(
-            "Each cell = average return for that sector in that calendar month, "
-            "across all constituent stocks and all years in the database."
-        )
+    if "sr_pivot" not in st.session_state:
+        return
 
-        fig = px.imshow(
-            pivot,
-            color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-            aspect="auto",
-            text_auto=".1f",
-            title="Average Monthly Return by Sector (%)",
-            labels={"x": "Month", "y": "Sector", "color": "Avg Return %"},
-        )
-        fig.update_layout(
-            height=max(480, len(pivot) * 38 + 120),
-            paper_bgcolor="white",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    pivot = st.session_state["sr_pivot"]
 
-        st.divider()
-        st.markdown("#### Quarterly View")
-        quarterly = pd.DataFrame({
-            "Q1 (Jan–Mar)": pivot[["Jan", "Feb", "Mar"]].mean(axis=1),
-            "Q2 (Apr–Jun)": pivot[["Apr", "May", "Jun"]].mean(axis=1),
-            "Q3 (Jul–Sep)": pivot[["Jul", "Aug", "Sep"]].mean(axis=1),
-            "Q4 (Oct–Dec)": pivot[["Oct", "Nov", "Dec"]].mean(axis=1),
-        }).round(2)
+    st.divider()
+    st.markdown("### Sector Rotation — Monthly Return Heatmap")
+    st.caption(
+        "Each cell = average return for that sector in that calendar month, "
+        "across all constituent stocks and all years in the database."
+    )
 
-        fig2 = px.imshow(
-            quarterly,
-            color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-            text_auto=".2f",
-            title="Average Quarterly Return by Sector (%)",
-            labels={"x": "Quarter", "y": "Sector", "color": "Avg Return %"},
-        )
-        fig2.update_layout(
-            height=max(420, len(quarterly) * 38 + 120),
-            paper_bgcolor="white",
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+    fig = px.imshow(
+        pivot,
+        color_continuous_scale="RdYlGn",
+        color_continuous_midpoint=0,
+        aspect="auto",
+        text_auto=".1f",
+        title="Average Monthly Return by Sector (%)",
+        labels={"x": "Month", "y": "Sector", "color": "Avg Return %"},
+    )
+    fig.update_layout(
+        height=max(480, len(pivot) * 38 + 120),
+        paper_bgcolor="white",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.dataframe(
-            pivot.style
-                .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
-                .format(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—"),
-            use_container_width=True,
-        )
+    st.divider()
+    st.markdown("#### Quarterly View")
+    quarterly = pd.DataFrame({
+        "Q1 (Jan–Mar)": pivot[["Jan", "Feb", "Mar"]].mean(axis=1),
+        "Q2 (Apr–Jun)": pivot[["Apr", "May", "Jun"]].mean(axis=1),
+        "Q3 (Jul–Sep)": pivot[["Jul", "Aug", "Sep"]].mean(axis=1),
+        "Q4 (Oct–Dec)": pivot[["Oct", "Nov", "Dec"]].mean(axis=1),
+    }).round(2)
+
+    fig2 = px.imshow(
+        quarterly,
+        color_continuous_scale="RdYlGn",
+        color_continuous_midpoint=0,
+        text_auto=".2f",
+        title="Average Quarterly Return by Sector (%)",
+        labels={"x": "Quarter", "y": "Sector", "color": "Avg Return %"},
+    )
+    fig2.update_layout(
+        height=max(420, len(quarterly) * 38 + 120),
+        paper_bgcolor="white",
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.dataframe(
+        pivot.style
+            .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+            .format(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—"),
+        use_container_width=True,
+    )
 
 
 def _render_mae_analysis():
@@ -1000,105 +1072,120 @@ def _render_mae_analysis():
         win_label = _window_label(sm, sd, holding_days)
         with st.spinner(f"Computing MAE/MFE for {sym_name}…"):
             mae_df = mae_analysis(symbol, sm, sd, holding_days)
-
         if mae_df is None:
             _no_data_warning()
-            return
+        else:
+            st.session_state["mae_df"]          = mae_df
+            st.session_state["_res_mae_symbol"] = symbol
+            st.session_state["_res_mae_sm"]     = sm
+            st.session_state["_res_mae_sd"]     = sd
+            st.session_state["_res_mae_hold"]   = holding_days
 
-        st.divider()
-        st.markdown(f"### {sym_name} — MAE & MFE  ·  {win_label}")
+    if "mae_df" not in st.session_state:
+        return
 
-        valid_mae = mae_df["MAE % (worst intraday dip)"].dropna()
-        valid_mfe = mae_df["MFE % (best intraday peak)"].dropna()
+    mae_df       = st.session_state["mae_df"]
+    symbol       = st.session_state["_res_mae_symbol"]
+    sm           = st.session_state["_res_mae_sm"]
+    sd           = st.session_state["_res_mae_sd"]
+    holding_days = st.session_state["_res_mae_hold"]
+    sym_name     = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+    win_label    = _window_label(sm, sd, holding_days)
 
-        # Suggested stop: 25th-percentile MAE (most adverse quarter of years) × 1.2 cushion
-        suggested_sl = round(float(valid_mae.quantile(0.25)) * 1.2, 1) if len(valid_mae) > 0 else None
+    st.divider()
+    st.markdown(f"### {sym_name} — MAE & MFE  ·  {win_label}")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Avg MAE",     f"{valid_mae.mean():+.2f}%" if len(valid_mae) > 0 else "—",
-                  help="Average deepest intraday dip from entry across all years")
-        c2.metric("Worst MAE",   f"{valid_mae.min():+.2f}%"  if len(valid_mae) > 0 else "—",
-                  help="Single worst intraday dip from entry across all history")
-        c3.metric("Suggested SL",
-                  f"{suggested_sl:+.1f}%" if suggested_sl is not None else "—",
-                  help="25th-pct MAE × 1.2 — tight enough to cut losses, "
-                       "wide enough not to get stopped on normal noise")
-        c4.metric("Avg MFE",     f"{valid_mfe.mean():+.2f}%" if len(valid_mfe) > 0 else "—",
-                  help="Average highest intraday peak reached during the window")
+    valid_mae = mae_df["MAE % (worst intraday dip)"].dropna()
+    valid_mfe = mae_df["MFE % (best intraday peak)"].dropna()
 
-        st.divider()
+    # Suggested stop: 25th-percentile MAE (most adverse quarter of years) × 1.2 cushion
+    suggested_sl = round(float(valid_mae.quantile(0.25)) * 1.2, 1) if len(valid_mae) > 0 else None
 
-        t1, t2, t3 = st.tabs(["MAE by Year", "MAE vs Final Return", "Raw Data"])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Avg MAE",     f"{valid_mae.mean():+.2f}%" if len(valid_mae) > 0 else "—",
+              help="Average deepest intraday dip from entry across all years")
+    c2.metric("Worst MAE",   f"{valid_mae.min():+.2f}%"  if len(valid_mae) > 0 else "—",
+              help="Single worst intraday dip from entry across all history")
+    c3.metric("Suggested SL",
+              f"{suggested_sl:+.1f}%" if suggested_sl is not None else "—",
+              help="25th-pct MAE × 1.2 — tight enough to cut losses, "
+                   "wide enough not to get stopped on normal noise")
+    c4.metric("Avg MFE",     f"{valid_mfe.mean():+.2f}%" if len(valid_mfe) > 0 else "—",
+              help="Average highest intraday peak reached during the window")
 
-        with t1:
-            bar_colors = [
-                "#27ae60" if p else "#e74c3c"
-                for p in mae_df["Profitable"]
-            ]
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=mae_df["Year"].astype(str),
-                y=mae_df["MAE % (worst intraday dip)"],
-                name="MAE (intraday low vs entry)",
-                marker_color=bar_colors,
-                text=[f"{v:+.1f}%" if pd.notna(v) else "" for v in mae_df["MAE % (worst intraday dip)"]],
-                textposition="outside",
-            ))
-            if len(valid_mae) > 0:
-                fig.add_hline(
-                    y=float(valid_mae.mean()),
-                    line_dash="dash", line_color="#e67e22",
-                    annotation_text=f"Avg MAE: {valid_mae.mean():+.1f}%",
-                    annotation_position="bottom right",
-                )
-            if suggested_sl is not None:
-                fig.add_hline(
-                    y=suggested_sl,
-                    line_dash="dot", line_color="#9b59b6",
-                    annotation_text=f"Suggested SL: {suggested_sl:+.1f}%",
-                    annotation_position="bottom left",
-                )
-            fig.update_layout(
-                title=f"{sym_name} — MAE per Year  ·  {win_label}"
-                      "  (green bar = trade ended profitable)",
-                xaxis_title="Year", yaxis_title="MAE %",
-                height=420, plot_bgcolor="white", paper_bgcolor="white",
-                xaxis_tickangle=-45,
+    st.divider()
+
+    t1, t2, t3 = st.tabs(["MAE by Year", "MAE vs Final Return", "Raw Data"])
+
+    with t1:
+        bar_colors = [
+            "#27ae60" if p else "#e74c3c"
+            for p in mae_df["Profitable"]
+        ]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=mae_df["Year"].astype(str),
+            y=mae_df["MAE % (worst intraday dip)"],
+            name="MAE (intraday low vs entry)",
+            marker_color=bar_colors,
+            text=[f"{v:+.1f}%" if pd.notna(v) else "" for v in mae_df["MAE % (worst intraday dip)"]],
+            textposition="outside",
+        ))
+        if len(valid_mae) > 0:
+            fig.add_hline(
+                y=float(valid_mae.mean()),
+                line_dash="dash", line_color="#e67e22",
+                annotation_text=f"Avg MAE: {valid_mae.mean():+.1f}%",
+                annotation_position="bottom right",
             )
-            st.plotly_chart(fig, use_container_width=True)
+        if suggested_sl is not None:
+            fig.add_hline(
+                y=suggested_sl,
+                line_dash="dot", line_color="#9b59b6",
+                annotation_text=f"Suggested SL: {suggested_sl:+.1f}%",
+                annotation_position="bottom left",
+            )
+        fig.update_layout(
+            title=f"{sym_name} — MAE per Year  ·  {win_label}"
+                  "  (green bar = trade ended profitable)",
+            xaxis_title="Year", yaxis_title="MAE %",
+            height=420, plot_bgcolor="white", paper_bgcolor="white",
+            xaxis_tickangle=-45,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        with t2:
-            st.caption(
-                "Each dot = one year.  X = how far the trade went against you (MAE).  "
-                "Y = where it ended up.  A cluster in top-left is ideal: small MAE, big gain."
-            )
-            scatter_df = mae_df.dropna(subset=["MAE % (worst intraday dip)", "Final Return %"])
-            fig2 = px.scatter(
-                scatter_df,
-                x="MAE % (worst intraday dip)",
-                y="Final Return %",
-                text="Year",
-                color="Final Return %",
-                color_continuous_scale="RdYlGn",
-                color_continuous_midpoint=0,
-                title=f"{sym_name} — MAE vs Final Return  ·  {win_label}",
-            )
-            fig2.update_traces(textposition="top center", marker_size=10)
-            fig2.add_hline(y=0, line_color="#888", line_dash="dot")
-            fig2.add_vline(x=0, line_color="#888", line_dash="dot")
-            fig2.update_layout(height=430, plot_bgcolor="white", paper_bgcolor="white")
-            st.plotly_chart(fig2, use_container_width=True)
+    with t2:
+        st.caption(
+            "Each dot = one year.  X = how far the trade went against you (MAE).  "
+            "Y = where it ended up.  A cluster in top-left is ideal: small MAE, big gain."
+        )
+        scatter_df = mae_df.dropna(subset=["MAE % (worst intraday dip)", "Final Return %"])
+        fig2 = px.scatter(
+            scatter_df,
+            x="MAE % (worst intraday dip)",
+            y="Final Return %",
+            text="Year",
+            color="Final Return %",
+            color_continuous_scale="RdYlGn",
+            color_continuous_midpoint=0,
+            title=f"{sym_name} — MAE vs Final Return  ·  {win_label}",
+        )
+        fig2.update_traces(textposition="top center", marker_size=10)
+        fig2.add_hline(y=0, line_color="#888", line_dash="dot")
+        fig2.add_vline(x=0, line_color="#888", line_dash="dot")
+        fig2.update_layout(height=430, plot_bgcolor="white", paper_bgcolor="white")
+        st.plotly_chart(fig2, use_container_width=True)
 
-        with t3:
-            st.dataframe(
-                mae_df.style.format({
-                    "Final Return %":              "{:+.2f}%",
-                    "MAE % (worst intraday dip)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
-                    "MFE % (best intraday peak)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
-                    "Risk/Reward (Final÷|MAE|)":   lambda x: f"{x:.2f}"   if pd.notna(x) else "—",
-                }),
-                use_container_width=True,
-            )
+    with t3:
+        st.dataframe(
+            mae_df.style.format({
+                "Final Return %":              "{:+.2f}%",
+                "MAE % (worst intraday dip)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
+                "MFE % (best intraday peak)":  lambda x: f"{x:+.2f}%" if pd.notna(x) else "—",
+                "Risk/Reward (Final÷|MAE|)":   lambda x: f"{x:.2f}"   if pd.notna(x) else "—",
+            }),
+            use_container_width=True,
+        )
 
 
 def tab_deep_insights():
