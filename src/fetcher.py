@@ -151,6 +151,78 @@ def bulk_download(
 daily_update = bulk_download
 
 
+def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
+    """
+    Register and download full OHLCV history for an arbitrary Yahoo Finance ticker.
+
+    Steps:
+      1. Quick validation — tries a 5-day history fetch to confirm the ticker exists.
+      2. Upserts a row in the `stocks` table (universe='CUSTOM', sector='Custom').
+      3. Incrementally downloads OHLCV from START_DATE (or last stored date) to today.
+
+    Returns:
+        (rows_fetched, error_message)  — error_message is None on success.
+    """
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return 0, "Ticker symbol cannot be empty."
+
+    conn = get_connection()
+    try:
+        # Step 1: validate
+        ticker = yf.Ticker(symbol)
+        probe = ticker.history(period="5d", auto_adjust=True, timeout=20)
+        if probe.empty:
+            return 0, (
+                f"No data found for '{symbol}' on Yahoo Finance. "
+                "Check spelling — NSE stocks should end with .NS (e.g. TATAPOWER.NS)."
+            )
+
+        # Step 2: register
+        friendly_name = name.strip() if name.strip() else symbol
+        conn.execute(
+            "INSERT OR REPLACE INTO stocks (symbol, name, sector, universe) "
+            "VALUES (?, ?, ?, ?)",
+            (symbol, friendly_name, "Custom", "CUSTOM"),
+        )
+        conn.commit()
+
+        # Step 3: incremental download
+        last = _last_stored_date(symbol, conn)
+        if last:
+            start = (
+                datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+        else:
+            start = START_DATE
+        end = date.today().strftime("%Y-%m-%d")
+
+        if start > end:
+            return 0, None  # already up to date
+
+        rows = fetch_symbol(symbol, start, end, conn)
+        return rows, None
+
+    except Exception as exc:
+        logger.error("fetch_custom_ticker(%s): %s", symbol, exc)
+        return 0, str(exc)
+    finally:
+        conn.close()
+
+
+def get_custom_tickers() -> list[dict]:
+    """Return all custom tickers registered in the stocks table (universe='CUSTOM')."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT symbol, name FROM stocks WHERE universe = 'CUSTOM' ORDER BY name"
+        )
+        return [{"symbol": r[0], "name": r[1]} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_data_status(universe: str = "NIFTY50") -> pd.DataFrame:
     """Return a summary DataFrame showing data availability for every stock."""
     conn = get_connection()

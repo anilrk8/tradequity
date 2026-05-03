@@ -25,6 +25,7 @@ from src.analyzer import (
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
     fetch_indices, get_index_status, has_index_data, INDEX_TICKERS,
+    fetch_custom_ticker, get_custom_tickers,
 )
 from src.universe import get_sectors, get_stocks, get_symbol_to_name
 from src.db import init_db
@@ -57,6 +58,10 @@ st.markdown(
 
 def _stock_selector(key_prefix: str = "") -> tuple[str, str]:
     stocks = get_stocks(UNIVERSE)
+    # Append any custom tickers registered via Data Management
+    custom = get_custom_tickers()
+    if custom:
+        stocks = stocks + [{"name": c["name"], "symbol": c["symbol"], "sector": "Custom"} for c in custom]
     display_opts = [f"{s['name']}  ({s['symbol']})" for s in stocks]
     sym_map      = {f"{s['name']}  ({s['symbol']})": s["symbol"] for s in stocks}
     choice = st.selectbox("Select Stock", display_opts, key=f"{key_prefix}_stock")
@@ -1357,6 +1362,65 @@ def tab_data_management():
                 st.dataframe(idx_status, use_container_width=True)
         else:
             st.caption("Click **Refresh Index Status** to check stored index data.")
+
+    # ── Custom Tickers ─────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Add Custom Ticker")
+    st.caption(
+        "Add any stock or index that isn't in the Nifty 500 universe. "
+        "Use the Yahoo Finance ticker format: NSE stocks end with **.NS** "
+        "(e.g. `TATAPOWER.NS`, `IRFC.NS`). Once added, the ticker appears in "
+        "all stock dropdowns for analysis."
+    )
+
+    c_ct_left, c_ct_right = st.columns([1, 2])
+
+    with c_ct_left:
+        ct_symbol = st.text_input(
+            "Yahoo Finance Ticker",
+            placeholder="e.g. TATAPOWER.NS",
+            key="ct_symbol",
+        )
+        ct_name = st.text_input(
+            "Friendly Name (optional)",
+            placeholder="e.g. Tata Power",
+            key="ct_name",
+        )
+        ct_btn = st.button(
+            "⬇  Fetch & Add",
+            type="primary",
+            use_container_width=True,
+            key="ct_fetch",
+            disabled=not ct_symbol.strip(),
+        )
+
+        if ct_btn and ct_symbol.strip():
+            with st.spinner(f"Fetching {ct_symbol.strip().upper()}…"):
+                rows, err = fetch_custom_ticker(ct_symbol, ct_name)
+            if err:
+                st.error(f"Failed: {err}")
+            elif rows == 0:
+                st.success(
+                    f"**{ct_symbol.strip().upper()}** registered and already up to date."
+                )
+            else:
+                st.success(
+                    f"**{ct_symbol.strip().upper()}** added — {rows} rows fetched."
+                )
+
+    with c_ct_right:
+        st.markdown("#### Custom Tickers in Database")
+        custom_list = get_custom_tickers()
+        if custom_list:
+            st.dataframe(
+                pd.DataFrame(custom_list).rename(
+                    columns={"symbol": "Ticker", "name": "Name"}
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No custom tickers added yet.")
 
 
 # ─── App shell ────────────────────────────────────────────────────────────────
