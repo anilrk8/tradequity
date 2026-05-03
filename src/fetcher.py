@@ -156,9 +156,14 @@ def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
     Register and download full OHLCV history for an arbitrary Yahoo Finance ticker.
 
     Steps:
-      1. Quick validation — tries a 5-day history fetch to confirm the ticker exists.
-      2. Upserts a row in the `stocks` table (universe='CUSTOM', sector='Custom').
-      3. Incrementally downloads OHLCV from START_DATE (or last stored date) to today.
+      1. Register the symbol in the `stocks` table (universe='CUSTOM').
+      2. Incrementally download OHLCV from START_DATE (or last stored date) to today.
+      3. If the download returns 0 rows (ticker doesn't exist / typo), unregister it
+         and return an error.
+
+    Note: No separate probe call is made — previously a 5-day probe was used for
+    validation but it caused yfinance to cache the short response, resulting in
+    the full history fetch also returning only a handful of rows.
 
     Returns:
         (rows_fetched, error_message)  — error_message is None on success.
@@ -169,16 +174,7 @@ def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
 
     conn = get_connection()
     try:
-        # Step 1: validate
-        ticker = yf.Ticker(symbol)
-        probe = ticker.history(period="5d", auto_adjust=True, timeout=20)
-        if probe.empty:
-            return 0, (
-                f"No data found for '{symbol}' on Yahoo Finance. "
-                "Check spelling — NSE stocks should end with .NS (e.g. TATAPOWER.NS)."
-            )
-
-        # Step 2: register
+        # Step 1: register (tentative — removed on failure)
         friendly_name = name.strip() if name.strip() else symbol
         conn.execute(
             "INSERT OR REPLACE INTO stocks (symbol, name, sector, universe) "
@@ -187,7 +183,7 @@ def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
         )
         conn.commit()
 
-        # Step 3: incremental download
+        # Step 2: incremental download
         last = _last_stored_date(symbol, conn)
         if last:
             start = (
@@ -201,6 +197,19 @@ def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
             return 0, None  # already up to date
 
         rows = fetch_symbol(symbol, start, end, conn)
+
+        # Step 3: validate — if no data came back the ticker is likely wrong
+        if rows == 0:
+            conn.execute(
+                "DELETE FROM stocks WHERE symbol = ? AND universe = 'CUSTOM'",
+                (symbol,),
+            )
+            conn.commit()
+            return 0, (
+                f"No data found for '{symbol}' on Yahoo Finance. "
+                "Check spelling — NSE stocks should end with .NS (e.g. TATAPOWER.NS)."
+            )
+
         return rows, None
 
     except Exception as exc:
