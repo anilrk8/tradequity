@@ -250,29 +250,3 @@ def build_seasonal_prompt(
 
     return "\n".join(lines)
 
-
-def stream_commentary(prompt: str) -> Generator[str, None, None]:
-    """
-    Stream Mistral commentary from local Ollama.
-    Yields text chunks as they arrive (for use with st.write_stream).
-
-    Raises RuntimeError if Ollama is not reachable.
-    """
-    import ollama
-
-    available, err = _check_ollama()
-    if not available:
-        raise RuntimeError(
-            f"Ollama is not running or not reachable at localhost:11434.\n"
-            f"Start it with: ollama serve\nDetail: {err}"
-        )
-
-    stream = ollama.chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        stream=True,
-    )
-    for chunk in stream:
-        content = chunk.get("message", {}).get("content", "")
-        if content:
-            yield content
