@@ -20,7 +20,7 @@ import streamlit as st
 from src.analyzer import (
     best_windows_for_stock, seasonal_analysis, sector_seasonal_analysis, universe_screener,
     monthly_return_heatmap, excess_return_vs_nifty, sector_rotation_analysis,
-    mae_analysis, stop_loss_survival,
+    mae_analysis, stop_loss_survival, similar_years_analysis,
 )
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
@@ -1061,6 +1061,169 @@ def _render_sector_rotation():
     )
 
 
+def _render_similar_years():
+    st.caption(
+        "Finds the historical years whose **market conditions at entry** most closely resemble today — "
+        "then shows what actually happened in those years.  "
+        "Similarity is measured across VIX level, NIFTY momentum, NIFTY vs 200-DMA, "
+        "Stock RSI-14, and Stock vs 200-DMA."
+    )
+    st.info(
+        "Requires **Market Indices** data (^NSEI + ^INDIAVIX). "
+        "Download them in the Data Management tab if not done yet.",
+        icon="ℹ️",
+    )
+
+    col_s, col_w = st.columns([1, 3])
+    with col_s:
+        _, symbol = _stock_selector("sim")
+    with col_w:
+        sm, sd, holding_days, _ = _entry_inputs("sim")
+
+    n_sim = st.slider("Number of similar years to show", min_value=3, max_value=10, value=5, key="sim_n")
+
+    if st.button("🔭 Find Similar Years", type="primary", key="sim_go"):
+        sym_name = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+        with st.spinner(f"Analysing conditions for {sym_name}…"):
+            result = similar_years_analysis(symbol, sm, sd, holding_days, n_similar=n_sim)
+        if result is None:
+            _no_data_warning()
+        else:
+            st.session_state["sim_result"]      = result
+            st.session_state["_res_sim_symbol"] = symbol
+            st.session_state["_res_sim_sm"]     = sm
+            st.session_state["_res_sim_sd"]     = sd
+            st.session_state["_res_sim_hold"]   = holding_days
+
+    if "sim_result" not in st.session_state:
+        return
+
+    result       = st.session_state["sim_result"]
+    symbol       = st.session_state["_res_sim_symbol"]
+    sm           = st.session_state["_res_sim_sm"]
+    sd           = st.session_state["_res_sim_sd"]
+    holding_days = st.session_state["_res_sim_hold"]
+    sym_name     = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+    win_label    = _window_label(sm, sd, holding_days)
+
+    st.divider()
+    st.markdown(f"### {sym_name}  ·  {win_label}")
+
+    if result["missing_indices"]:
+        st.warning(
+            "Index data (NIFTY / VIX) not found in database. "
+            "Go to **Data Management → Download Indices** and retry."
+        )
+        return
+
+    if result["today_features"] is None:
+        st.warning("Could not compute today's conditions — not enough history in DB.")
+        return
+
+    # ── Today's conditions ────────────────────────────────────────────────────
+    tf = result["today_features"]
+    st.markdown(f"**Today's market conditions** *(reference date: {result['today_entry']})*")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("India VIX",         f"{tf['vix_level']:.1f}")
+    c2.metric("NIFTY 20d Mom",      f"{tf['nifty_mom_20d']:+.2f}%")
+    c3.metric("NIFTY vs 200DMA",    f"{tf['nifty_200dma_dist']:+.2f}%" if tf['nifty_200dma_dist'] is not None else "—")
+    c4.metric("Stock RSI-14",       f"{tf['stock_rsi14']:.1f}")
+    c5.metric("Stock vs 200DMA",    f"{tf['stock_200dma_dist']:+.2f}%" if tf['stock_200dma_dist'] is not None else "—")
+
+    st.divider()
+
+    similar_df = result["similar_years"]
+    if similar_df is None or similar_df.empty:
+        st.warning("Not enough historical data with complete features to compute similarity.")
+        return
+
+    # ── Similar years summary ─────────────────────────────────────────────────
+    st.markdown("#### Most Similar Historical Years")
+    st.caption(
+        "These are the years that entered this window under the most similar market conditions to today. "
+        "The **Final Return %** column shows what actually happened — your base-rate expectation."
+    )
+
+    feature_cols = ["VIX at Entry", "NIFTY 20d Mom %", "NIFTY vs 200DMA %", "Stock RSI-14", "Stock vs 200DMA %"]
+    display_cols = ["Year", "Similarity Score", "Final Return %"] + feature_cols
+    display_cols = [c for c in display_cols if c in similar_df.columns]
+
+    def _color_return(val):
+        if pd.isna(val):
+            return ""
+        return "color: #27ae60; font-weight:600" if val > 0 else "color: #e74c3c; font-weight:600"
+
+    fmt = {"Final Return %": "{:+.2f}%", "Similarity Score": "{:.1f}"}
+    for c in feature_cols:
+        if c in similar_df.columns:
+            fmt[c] = "{:.1f}"
+
+    st.dataframe(
+        similar_df[display_cols]
+        .style
+        .format(fmt)
+        .map(_color_return, subset=["Final Return %"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ── Outcome bar chart ─────────────────────────────────────────────────────
+    fig = go.Figure()
+    bar_colors = ["#27ae60" if p else "#e74c3c" for p in similar_df["Profitable"]]
+    fig.add_trace(go.Bar(
+        x=similar_df["Year"].astype(str),
+        y=similar_df["Final Return %"],
+        marker_color=bar_colors,
+        text=[f"{v:+.1f}%" for v in similar_df["Final Return %"]],
+        textposition="outside",
+    ))
+    fig.add_hline(y=0, line_color="#888", line_dash="dot")
+    avg = similar_df["Final Return %"].mean()
+    fig.add_hline(
+        y=avg, line_dash="dash", line_color="#e67e22",
+        annotation_text=f"Avg: {avg:+.1f}%",
+        annotation_position="bottom right",
+    )
+    fig.update_layout(
+        title=f"Returns in the {len(similar_df)} most similar years  ·  {win_label}",
+        xaxis_title="Year", yaxis_title="Final Return %",
+        height=380, plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Radar chart — today vs avg of similar years ───────────────────────────
+    radar_cols = [c for c in feature_cols if c in similar_df.columns and similar_df[c].notna().any()]
+    if len(radar_cols) >= 3:
+        st.markdown("#### Conditions: Today vs Average of Similar Years")
+        sim_avg = similar_df[radar_cols].mean()
+        today_vals = [tf.get({
+            "VIX at Entry": "vix_level",
+            "NIFTY 20d Mom %": "nifty_mom_20d",
+            "NIFTY vs 200DMA %": "nifty_200dma_dist",
+            "Stock RSI-14": "stock_rsi14",
+            "Stock vs 200DMA %": "stock_200dma_dist",
+        }.get(c, c), 0) or 0 for c in radar_cols]
+
+        fig_r = go.Figure()
+        fig_r.add_trace(go.Scatterpolar(
+            r=today_vals + [today_vals[0]],
+            theta=radar_cols + [radar_cols[0]],
+            fill="toself", name="Today",
+            line_color="#2980b9", fillcolor="rgba(41,128,185,0.15)",
+        ))
+        fig_r.add_trace(go.Scatterpolar(
+            r=sim_avg.tolist() + [sim_avg.iloc[0]],
+            theta=radar_cols + [radar_cols[0]],
+            fill="toself", name="Avg of similar years",
+            line_color="#e67e22", fillcolor="rgba(230,126,34,0.15)",
+        ))
+        fig_r.update_layout(
+            polar=dict(radialaxis=dict(visible=True)),
+            height=400, showlegend=True,
+        )
+        st.plotly_chart(fig_r, use_container_width=True)
+
+
 def _render_mae_analysis():
     st.caption(
         "**Maximum Adverse Excursion (MAE):** how far against you the trade went "
@@ -1243,11 +1406,12 @@ def tab_deep_insights():
         "Download market indices first (Data Management tab) to unlock "
         "Excess vs NIFTY and the VIX overlay."
     )
-    sub1, sub2, sub3, sub4 = st.tabs([
+    sub1, sub2, sub3, sub4, sub5 = st.tabs([
         "📅 Monthly Heatmap",
         "📊 Excess vs NIFTY",
         "🔄 Sector Rotation",
         "🛡 MAE & Stop-Loss",
+        "🔭 Similar Years",
     ])
     with sub1:
         _render_monthly_heatmap()
@@ -1257,6 +1421,8 @@ def tab_deep_insights():
         _render_sector_rotation()
     with sub4:
         _render_mae_analysis()
+    with sub5:
+        _render_similar_years()
 
 
 # ─── Tab 5 — Data Management ──────────────────────────────────────────────────

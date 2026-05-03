@@ -652,3 +652,213 @@ def stop_loss_survival(mae_df: pd.DataFrame) -> pd.DataFrame:
         })
 
     return pd.DataFrame(rows)
+
+
+# ─── Similar Year Finder ───────────────────────────────────────────────────────
+
+def _compute_entry_features(
+    stock_df: pd.DataFrame,
+    nifty_df: pd.DataFrame,
+    vix_df: pd.DataFrame,
+    entry_date: pd.Timestamp,
+) -> dict | None:
+    """
+    Compute five market-condition features at a given entry date.
+
+    Features
+    --------
+    vix_level          : India VIX closing value on entry day
+    nifty_mom_20d      : NIFTY 50 return over the 20 trading days before entry (%)
+    nifty_200dma_dist  : NIFTY 50 close vs its 200-day SMA at entry (%)
+    stock_rsi14        : Stock RSI-14 at entry
+    stock_200dma_dist  : Stock close vs its 200-day SMA at entry (%)
+    """
+    def _nearest(df: pd.DataFrame, dt: pd.Timestamp) -> pd.Timestamp | None:
+        prior = df[df.index <= dt]
+        return prior.index[-1] if not prior.empty else None
+
+    # ── VIX ──────────────────────────────────────────────────────────────────
+    vix_date = _nearest(vix_df, entry_date)
+    if vix_date is None:
+        return None
+    vix_level = float(vix_df.loc[vix_date, "close"])
+
+    # ── NIFTY 20-day momentum & 200-DMA distance ──────────────────────────────
+    nifty_date = _nearest(nifty_df, entry_date)
+    if nifty_date is None:
+        return None
+    nifty_pos = nifty_df.index.get_loc(nifty_date)
+    if nifty_pos < 20:
+        return None
+    nifty_close = float(nifty_df["close"].iloc[nifty_pos])
+    nifty_close_20ago = float(nifty_df["close"].iloc[nifty_pos - 20])
+    nifty_mom_20d = (nifty_close - nifty_close_20ago) / nifty_close_20ago * 100
+    nifty_200dma_dist = None
+    if nifty_pos >= 200:
+        nifty_200dma = float(nifty_df["close"].iloc[nifty_pos - 199 : nifty_pos + 1].mean())
+        nifty_200dma_dist = (nifty_close - nifty_200dma) / nifty_200dma * 100
+
+    # ── Stock RSI-14 & 200-DMA distance ──────────────────────────────────────
+    stock_date = _nearest(stock_df, entry_date)
+    if stock_date is None:
+        return None
+    stock_pos = stock_df.index.get_loc(stock_date)
+    if stock_pos < 14:
+        return None
+    stock_close = float(stock_df["close"].iloc[stock_pos])
+
+    deltas = stock_df["close"].iloc[stock_pos - 13 : stock_pos + 1].diff().dropna()
+    gain = deltas.clip(lower=0).mean()
+    loss = (-deltas.clip(upper=0)).mean()
+    stock_rsi14 = 100.0 if loss == 0 else round(100 - 100 / (1 + gain / loss), 2)
+
+    stock_200dma_dist = None
+    if stock_pos >= 200:
+        stock_200dma = float(stock_df["close"].iloc[stock_pos - 199 : stock_pos + 1].mean())
+        stock_200dma_dist = (stock_close - stock_200dma) / stock_200dma * 100
+
+    return {
+        "vix_level":         round(vix_level, 2),
+        "nifty_mom_20d":     round(nifty_mom_20d, 2),
+        "nifty_200dma_dist": round(nifty_200dma_dist, 2) if nifty_200dma_dist is not None else None,
+        "stock_rsi14":       stock_rsi14,
+        "stock_200dma_dist": round(stock_200dma_dist, 2) if stock_200dma_dist is not None else None,
+    }
+
+
+_FEATURE_KEYS = [
+    ("vix_level",         "VIX at Entry"),
+    ("nifty_mom_20d",     "NIFTY 20d Mom %"),
+    ("nifty_200dma_dist", "NIFTY vs 200DMA %"),
+    ("stock_rsi14",       "Stock RSI-14"),
+    ("stock_200dma_dist", "Stock vs 200DMA %"),
+]
+_FEATURE_COLS = [col for _, col in _FEATURE_KEYS]
+
+
+def similar_years_analysis(
+    symbol: str,
+    start_month: int,
+    start_day: int,
+    holding_days: int,
+    n_similar: int = 5,
+) -> dict | None:
+    """
+    Find the N historically most similar years to today's market conditions
+    for the given stock + seasonal window.
+
+    Similarity is measured as normalised Euclidean distance across five features:
+    VIX level, NIFTY 20-day momentum, NIFTY vs 200-DMA, Stock RSI-14, Stock vs 200-DMA.
+
+    Returns a dict with keys:
+        today_features  : dict of the 5 features for today (or None if unavailable)
+        today_entry     : date string of the reference entry date used for today
+        all_years       : DataFrame — every year with features + trade outcome
+        similar_years   : DataFrame — top N most similar years, sorted by distance
+        missing_indices : bool — True if VIX / NIFTY data is absent from DB
+    """
+    conn = get_connection()
+    stock_df = _load_closes(symbol, conn)
+    nifty_df = _load_index_closes("^NSEI", conn)
+    vix_df   = _load_index_closes("^INDIAVIX", conn)
+    conn.close()
+
+    if stock_df.empty:
+        return None
+
+    missing_indices = nifty_df.empty or vix_df.empty
+
+    years = sorted(stock_df.index.year.unique())
+    rows = []
+
+    for year in years:
+        r = _window_return_by_days(stock_df, year, start_month, start_day, holding_days)
+        if r is None:
+            continue
+        entry_date = pd.Timestamp(r["start_date"])
+        feats = (
+            _compute_entry_features(stock_df, nifty_df, vix_df, entry_date)
+            if not missing_indices else None
+        )
+        row = {
+            "Year":           year,
+            "Entry Date":     r["start_date"],
+            "Final Return %": r["return_pct"],
+            "Profitable":     r["return_pct"] > 0,
+        }
+        if feats:
+            for key, col in _FEATURE_KEYS:
+                row[col] = feats.get(key)
+        rows.append(row)
+
+    if not rows:
+        return None
+
+    all_years_df = pd.DataFrame(rows)
+
+    if missing_indices:
+        return {
+            "today_features":  None,
+            "today_entry":     None,
+            "all_years":       all_years_df,
+            "similar_years":   None,
+            "missing_indices": True,
+        }
+
+    # ── Compute "today" reference entry date ──────────────────────────────────
+    current_year = pd.Timestamp.today().year
+    target_entry = _safe_timestamp(current_year, start_month, start_day)
+    if target_entry is not None:
+        candidates = stock_df[stock_df.index >= target_entry]
+        today_entry = candidates.index[0] if not candidates.empty else stock_df.index[-1]
+    else:
+        today_entry = stock_df.index[-1]
+
+    today_feats = _compute_entry_features(stock_df, nifty_df, vix_df, today_entry)
+    if today_feats is None:
+        return {
+            "today_features":  None,
+            "today_entry":     today_entry.strftime("%Y-%m-%d"),
+            "all_years":       all_years_df,
+            "similar_years":   None,
+            "missing_indices": False,
+        }
+
+    # ── Similarity: normalised Euclidean distance ─────────────────────────────
+    feat_df = all_years_df.dropna(subset=_FEATURE_COLS).copy()
+    if feat_df.empty:
+        return {
+            "today_features":  today_feats,
+            "today_entry":     today_entry.strftime("%Y-%m-%d"),
+            "all_years":       all_years_df,
+            "similar_years":   None,
+            "missing_indices": False,
+        }
+
+    means = feat_df[_FEATURE_COLS].mean()
+    stds  = feat_df[_FEATURE_COLS].std().replace(0, 1)
+
+    today_vec  = np.array([today_feats.get(k, 0) or 0 for k, _ in _FEATURE_KEYS], dtype=float)
+    today_norm = (today_vec - means.values) / stds.values
+    hist_norm  = (feat_df[_FEATURE_COLS].values - means.values) / stds.values
+    distances  = np.sqrt(((hist_norm - today_norm) ** 2).sum(axis=1))
+
+    feat_df["Similarity Distance"] = distances
+    d_min, d_max = distances.min(), distances.max()
+    feat_df["Similarity Score"]    = (
+        100 - ((distances - d_min) / (d_max - d_min + 1e-9) * 100)
+    ).round(1)
+
+    similar = (
+        feat_df.sort_values("Similarity Distance")
+        .head(n_similar)
+        .reset_index(drop=True)
+    )
+
+    return {
+        "today_features":  today_feats,
+        "today_entry":     today_entry.strftime("%Y-%m-%d"),
+        "all_years":       all_years_df,
+        "similar_years":   similar,
+        "missing_indices": False,
+    }
