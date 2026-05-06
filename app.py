@@ -753,6 +753,111 @@ def _render_window_best_stocks():
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    # ── Entry Date Sensitivity ─────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📅 Entry Date Sensitivity")
+    st.caption(
+        "Shows how each top stock's **'Target Met' count** changes when you shift "
+        "the entry date by ±3 days. A stock with identical or near-identical counts "
+        "across all 7 dates is a **robust** seasonal signal. Wide variation means it's "
+        "sitting right on the edge of your threshold — treat it with caution."
+    )
+
+    top_n = min(20, len(display_df))
+    top_symbols = display_df.head(top_n)["Symbol"].tolist()
+    top_names   = {
+        row["Symbol"]: row["Name"]
+        for _, row in display_df.head(top_n).iterrows()
+    }
+
+    if st.button("Run Sensitivity Check →", key="ws_sensitivity"):
+        base_date = datetime.date(2000, sm, sd)   # year doesn't matter — just for arithmetic
+        offsets   = list(range(-3, 4))            # -3 to +3
+        col_labels = []
+        sensitivity_rows = {sym: [] for sym in top_symbols}
+
+        with st.spinner("Running sensitivity check for ±3 days…"):
+            for offset in offsets:
+                shifted     = base_date + datetime.timedelta(days=offset)
+                o_sm, o_sd  = shifted.month, shifted.day
+                label       = f"{'+'if offset>=0 else ''}{offset}d\n({_window_label(o_sm, o_sd, holding_days).split('+')[0].strip()})"
+                col_labels.append(label)
+
+                for sym in top_symbols:
+                    _, summary = seasonal_analysis(sym, o_sm, o_sd, holding_days, min_return)
+                    sensitivity_rows[sym].append(
+                        summary["target_met_count"] if summary else 0
+                    )
+
+        # Build DataFrame
+        sens_df = pd.DataFrame(
+            sensitivity_rows,
+            index=col_labels,
+        ).T   # rows = stocks, cols = date offsets
+
+        sens_df.insert(0, "Stock", [f"{top_names.get(s,s)}" for s in top_symbols])
+        base_col = col_labels[3]   # the "+0d" column = user's chosen date
+        sens_df["Wobble (max−min)"] = sens_df[col_labels].max(axis=1) - sens_df[col_labels].min(axis=1)
+        sens_df["Stability"] = sens_df["Wobble (max−min)"].apply(
+            lambda w: "🟢 Robust" if w == 0 else ("🟡 Minor" if w <= 1 else "🔴 Fragile")
+        )
+
+        st.session_state["ws_sensitivity_df"] = sens_df
+        st.session_state["ws_sensitivity_cols"] = col_labels
+        st.session_state["ws_sensitivity_base"] = base_col
+
+    if "ws_sensitivity_df" in st.session_state:
+        sens_df   = st.session_state["ws_sensitivity_df"]
+        col_labels = st.session_state["ws_sensitivity_cols"]
+        base_col   = st.session_state["ws_sensitivity_base"]
+
+        total_years = int(display_df["Out of (yrs)"].max())
+
+        def _color_cell(val):
+            """Green if high hit rate, fading to red."""
+            try:
+                v = int(val)
+            except (ValueError, TypeError):
+                return ""
+            pct = v / max(total_years, 1)
+            if pct >= 0.7:   return "background-color: #c7f2c7; color: #1a5c1a"
+            if pct >= 0.5:   return "background-color: #f7f7c7; color: #5c5c00"
+            if pct >= 0.3:   return "background-color: #f2ddc7; color: #7a3e00"
+            return                  "background-color: #f2c7c7; color: #7a0000"
+
+        def _color_wobble(val):
+            try: w = int(val)
+            except (ValueError, TypeError): return ""
+            if w == 0: return "background-color: #c7f2c7; font-weight:600"
+            if w == 1: return "background-color: #f7f7c7"
+            return             "background-color: #f2c7c7"
+
+        styled = sens_df.style.applymap(_color_cell, subset=col_labels)
+        styled = styled.applymap(_color_wobble, subset=["Wobble (max−min)"])
+
+        # Bold the base (0d) column header
+        styled = styled.set_properties(
+            subset=[base_col],
+            **{"font-weight": "bold", "border-left": "2px solid #2980b9", "border-right": "2px solid #2980b9"}
+        )
+
+        st.dataframe(styled, use_container_width=True, height=min(60 + 35 * len(sens_df), 600))
+
+        robust  = (sens_df["Wobble (max−min)"] == 0).sum()
+        fragile = (sens_df["Wobble (max−min)"] >= 2).sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🟢 Robust (no wobble)",       robust)
+        c2.metric("🟡 Minor wobble (±1 yr)",     len(sens_df) - robust - fragile)
+        c3.metric("🔴 Fragile (≥2 yr change)",   fragile)
+
+        st.info(
+            "**Bold column** = your chosen entry date.  "
+            "Each cell = number of years out of the historical sample where the "
+            f"≥{min_return:.0f}% target was met.  "
+            "**Wobble** = max – min across all 7 dates; zero means the stock is "
+            "indifferent to which exact day you enter."
+        )
+
 
 def tab_best_windows():
     sub1, sub2 = st.tabs(["Stock → Best Entry Windows", "Window → Best Stocks"])
