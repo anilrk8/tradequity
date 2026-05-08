@@ -397,6 +397,13 @@ def tab_stock_analysis():
     st.divider()
     st.markdown(f"### {sym_name} &nbsp;·&nbsp; {win_label}")
 
+    if summary.get("low_sample_warning"):
+        st.warning(
+            f"⚠ **Very limited history** — only **{summary['total_instances']} completed window(s)** found. "
+            f"This stock may be recently listed. Results are indicative only and have low statistical confidence. "
+            f"Treat with caution."
+        )
+
     if summary["target_never_met"]:
         st.error(
             f"⚠  The target of **{min_return:.0f}%** was **never** reached in this window "

@@ -188,7 +188,7 @@ def seasonal_analysis(
         if r:
             raw_results.append(r)
 
-    if len(raw_results) < 3:
+    if len(raw_results) < 2:
         return None, {"error": "insufficient_years", "years_found": len(raw_results)}
 
     norm_series_map = {r["year"]: r.pop("_norm") for r in raw_results}
@@ -218,6 +218,7 @@ def seasonal_analysis(
         "best_year":             int(results_df.loc[results_df["return_pct"].idxmax(), "year"]),
         "worst_year":            int(results_df.loc[results_df["return_pct"].idxmin(), "year"]),
         "min_return_pct":        min_return_pct,
+        "low_sample_warning":    total < 5,
         "norm_series_map":       norm_series_map,
     }
 
