@@ -36,6 +36,7 @@ from src.analyzer import (
     mae_analysis,
     stop_loss_survival,
     similar_years_analysis,
+    volume_analysis,
 )
 from src.fetcher import (
     bulk_download,
@@ -190,6 +191,8 @@ def get_seasonal_analysis(
     clean["losing_years"] = [int(y) for y in losing]
     clean["win_rate_pct"] = round(clean["target_met_count"] / clean["total_instances"] * 100, 1)
     clean["median_return_pct"] = round(float(results_df["return_pct"].median()), 2)
+    # Pass through low_sample_warning for the React frontend
+    clean.setdefault("low_sample_warning", False)
 
     return {
         "rows":       _df_to_records(results_df.drop(columns=["mae_pct", "mfe_pct"], errors="ignore")),
@@ -326,6 +329,99 @@ def get_similar_years(
         "all_years":       _df_to_records(result.get("all_years")),
         "similar_years":   _df_to_records(result.get("similar_years")),
         "missing_indices": result.get("missing_indices", False),
+    }
+
+
+@app.get("/api/analysis/volume")
+def get_volume_analysis(
+    symbol: str,
+    start_month: int = Query(ge=1, le=12),
+    start_day:   int = Query(ge=1, le=31),
+    holding_days: int = Query(ge=5, le=365),
+):
+    """
+    Volume-based analytics for one stock / window.
+
+    Response includes:
+      - monthly_vol  : [{Month, Avg Normalised Volume}] — seasonal volume rhythm
+      - window_rows  : per-year volume + return stats
+      - obv_by_year  : {year: [cumulative_obv_values]} — OBV within each window
+      - summary      : aggregate confirmation stats
+    """
+    result = volume_analysis(symbol, start_month, start_day, holding_days)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No volume data found for this symbol/window.")
+
+    # Serialise boolean columns in window_df
+    import pandas as pd
+    wdf = result["window_df"].copy()
+    for col in ["Vol Confirmed Entry", "Accumulation Window", "Vol-Price Divergence"]:
+        if col in wdf.columns:
+            wdf[col] = wdf[col].astype(bool)
+
+    return {
+        "monthly_vol":  _df_to_records(result["monthly_vol_df"]),
+        "window_rows":  _df_to_records(wdf),
+        "obv_by_year":  {str(k): v for k, v in result["obv_by_year"].items()},
+        "summary":      result["summary"],
+    }
+
+
+@app.get("/api/analysis/sensitivity")
+def get_entry_date_sensitivity(
+    start_month: int = Query(ge=1, le=12),
+    start_day:   int = Query(ge=1, le=31),
+    holding_days: int = Query(ge=5, le=365),
+    min_return:   float = Query(default=12.0),
+    top_n:        int = Query(default=20, ge=5, le=50),
+    universe: str = Query(default=UNIVERSE),
+):
+    """
+    Entry date sensitivity check for the top-N stocks from universe_screener.
+
+    For each of the 7 dates (±3 days around the chosen entry), runs
+    seasonal_analysis for every top-N stock and returns the target_met_count.
+
+    Response:
+      - base_label : the column label for the chosen entry (offset 0)
+      - offsets    : list of offset dicts {offset, label, month, day}
+      - rows       : [{symbol, name, <offset_label>: count, ...}]
+    """
+    import datetime
+
+    # First get the ranked list for the base window
+    ranked_df = universe_screener(start_month, start_day, holding_days, min_return, universe)
+    if ranked_df is None:
+        raise HTTPException(status_code=404, detail="No screener results for this window.")
+
+    top_stocks = ranked_df.head(top_n)[["Symbol", "Name"]].to_dict(orient="records")
+    month_abbrs = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+    base_date = datetime.date(2000, start_month, start_day)
+    offsets_meta = []
+    for offset in range(-3, 4):
+        shifted = base_date + datetime.timedelta(days=offset)
+        label = f"{'+' if offset >= 0 else ''}{offset}d ({month_abbrs[shifted.month-1]} {shifted.day})"
+        offsets_meta.append({"offset": offset, "label": label, "month": shifted.month, "day": shifted.day})
+
+    rows = []
+    for stock in top_stocks:
+        sym = stock["Symbol"]
+        row = {"symbol": sym, "name": stock["Name"]}
+        for om in offsets_meta:
+            _, summary = seasonal_analysis(sym, om["month"], om["day"], holding_days, min_return)
+            row[om["label"]] = summary.get("target_met_count", 0) if (summary and "error" not in summary) else 0
+        # Compute wobble
+        counts = [row[om["label"]] for om in offsets_meta]
+        row["wobble"] = max(counts) - min(counts)
+        row["stability"] = "Robust" if row["wobble"] == 0 else ("Minor" if row["wobble"] <= 1 else "Fragile")
+        rows.append(row)
+
+    base_label = offsets_meta[3]["label"]   # offset=0 is index 3
+    return {
+        "base_label": base_label,
+        "offsets":    offsets_meta,
+        "rows":       rows,
     }
 
 

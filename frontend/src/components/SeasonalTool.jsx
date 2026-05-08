@@ -3,6 +3,7 @@ import StockAnalysis  from "./StockAnalysis";
 import SectorAnalysis from "./SectorAnalysis";
 import BestWindows    from "./BestWindows";
 import DeepInsights   from "./DeepInsights";
+import VolumeAnalysis from "./VolumeAnalysis";
 import DataManagement from "./DataManagement";
 import "../styles/seasonal.css";
 
@@ -11,6 +12,7 @@ const TABS = [
   { id: "sector",  label: "🏭 Sector Analysis" },
   { id: "windows", label: "🔍 Best Windows" },
   { id: "deep",    label: "🧮 Deep Insights" },
+  { id: "volume",  label: "📦 Volume Analysis" },
   { id: "data",    label: "⚙️ Data" },
 ];
 
@@ -53,6 +55,7 @@ export default function SeasonalTool() {
         {activeTab === "sector"  && <SectorAnalysis />}
         {activeTab === "windows" && <BestWindows />}
         {activeTab === "deep"    && <DeepInsights />}
+        {activeTab === "volume"  && <VolumeAnalysis />}
         {activeTab === "data"    && <DataManagement />}
       </div>
     </div>

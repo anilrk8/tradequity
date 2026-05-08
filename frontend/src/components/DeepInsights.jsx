@@ -11,6 +11,7 @@ import {
   getSectorRotation,
   getMaeAnalysis,
   getSimilarYears,
+  getVolumeAnalysis,
 } from "../api";
 import "../styles/seasonal.css";
 
@@ -42,6 +43,7 @@ export default function DeepInsights() {
   const [rotationData, setRotationData] = useState(null);
   const [maeData,      setMaeData]      = useState(null);
   const [similarData,  setSimilarData]  = useState(null);
+  const [volumeData,   setVolumeData]   = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -71,6 +73,9 @@ export default function DeepInsights() {
       } else if (activeTab === "similar") {
         const d = await getSimilarYears(symbol, month, day, holdingDays);
         setSimilarData(d);
+      } else if (activeTab === "volume") {
+        const d = await getVolumeAnalysis(symbol, month, day, holdingDays);
+        setVolumeData(d);
       }
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -82,10 +87,11 @@ export default function DeepInsights() {
     { id: "rotation", label: "Sector Rotation" },
     { id: "mae",      label: "MAE & Stop-Loss" },
     { id: "similar",  label: "Similar Years" },
+    { id: "volume",   label: "📦 Volume" },
   ];
 
-  const needsDate = ["excess", "mae", "similar"];
-  const needsStock = ["heatmap", "excess", "mae", "similar"];
+  const needsDate  = ["excess", "mae", "similar", "volume"];
+  const needsStock = ["heatmap", "excess", "mae", "similar", "volume"];
 
   return (
     <div className="tab-content">
@@ -167,6 +173,11 @@ export default function DeepInsights() {
       {/* ── Similar Years ── */}
       {activeTab === "similar" && similarData && (
         <SimilarView data={similarData} />
+      )}
+
+      {/* ── Volume Analysis ── */}
+      {activeTab === "volume" && volumeData && (
+        <VolumeView data={volumeData} />
       )}
     </div>
   );
@@ -377,6 +388,90 @@ function ResultTable({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* ── Volume sub-view (embedded in DeepInsights) ── */
+const MONTH_ORDER = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function VolumeView({ data }) {
+  const { monthly_vol, window_rows, obv_by_year, summary } = data;
+  const s = summary;
+  const diff = s.avg_return_vol_confirmed != null && s.avg_return_unconfirmed != null
+    ? s.avg_return_vol_confirmed - s.avg_return_unconfirmed : null;
+  const divYears = window_rows?.filter((r) => r["Vol-Price Divergence"]).map((r) => r.Year) || [];
+  const ordered = MONTH_ORDER.map((m) => monthly_vol?.find((r) => r.Month === m) || { Month: m, "Avg Normalised Volume": null });
+  const dirMap = {};
+  window_rows?.forEach((r) => { dirMap[r.Year] = r.Direction; });
+
+  return (
+    <div>
+      {/* Summary metrics */}
+      <div className="metrics-row" style={{ marginTop: 12 }}>
+        <div className="metric-card">
+          <div className="metric-value">{s.vol_confirmed_entries} / {s.total_years}</div>
+          <div className="metric-label">Vol-Confirmed Entries</div>
+        </div>
+        <div className="metric-card">
+          <div className={`metric-value ${(s.avg_return_vol_confirmed || 0) >= 0 ? "positive" : "negative"}`}>
+            {s.avg_return_vol_confirmed != null ? `${s.avg_return_vol_confirmed > 0 ? "+" : ""}${s.avg_return_vol_confirmed.toFixed(2)}%` : "—"}
+          </div>
+          <div className="metric-label">Avg (High Vol Entry)</div>
+        </div>
+        <div className="metric-card">
+          <div className={`metric-value ${(s.avg_return_unconfirmed || 0) >= 0 ? "positive" : "negative"}`}>
+            {s.avg_return_unconfirmed != null ? `${s.avg_return_unconfirmed > 0 ? "+" : ""}${s.avg_return_unconfirmed.toFixed(2)}%` : "—"}
+          </div>
+          <div className="metric-label">Avg (Low Vol Entry)</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-value">{s.divergence_count}</div>
+          <div className="metric-label">Price-Vol Divergence Yrs</div>
+        </div>
+      </div>
+      {diff !== null && (
+        <div className={`alert ${diff > 0 ? "alert-success" : "alert-info"}`} style={{ marginBottom: 16 }}>
+          {diff > 0
+            ? `Vol-confirmed entries outperformed by +${diff.toFixed(2)}% on average.`
+            : `No clear volume edge in this window (${diff.toFixed(2)}% difference).`}
+        </div>
+      )}
+
+      {/* Seasonal rhythm */}
+      <h4 className="section-header">Seasonal Volume Rhythm</h4>
+      <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={ordered} margin={{ top: 10, right: 20, bottom: 20, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+          <XAxis dataKey="Month" />
+          <YAxis tickFormatter={(v) => v.toFixed(1)} />
+          <Tooltip formatter={(v) => v != null ? `${v.toFixed(2)}×` : "—"} />
+          <Bar dataKey="Avg Normalised Volume" radius={[4,4,0,0]}>
+            {ordered.map((entry, i) => (
+              <Cell key={i} fill={(entry["Avg Normalised Volume"] || 0) >= 1 ? "#27ae60" : "#e74c3c"} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+
+      {/* Vol vs Return */}
+      <h4 className="section-header">Volume vs Return by Year</h4>
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart data={window_rows} margin={{ top: 10, right: 50, bottom: 10, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+          <XAxis dataKey="Year" />
+          <YAxis />
+          <Tooltip />
+          <Bar dataKey="Return %" radius={[3,3,0,0]}>
+            {window_rows?.map((r, i) => <Cell key={i} fill={r.Direction === "UP" ? "#27ae60" : "#e74c3c"} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      {divYears.length > 0 && (
+        <div className="alert alert-error">
+          ⚠ Price-Volume Divergence in years: {divYears.join(", ")} — price rose on below-average volume.
+        </div>
+      )}
     </div>
   );
 }

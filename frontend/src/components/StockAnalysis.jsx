@@ -137,6 +137,13 @@ export default function StockAnalysis() {
 
       {error && <div className="alert alert-error">{error}</div>}
 
+      {summary?.low_sample_warning && (
+        <div className="alert alert-error">
+          ⚠ <strong>Very limited history</strong> — only <strong>{summary.total_instances} completed window(s)</strong> found.
+          This stock may be recently listed. Results have low statistical confidence — treat with caution.
+        </div>
+      )}
+
       {summary && (
         <>
           <div className="metrics-row">

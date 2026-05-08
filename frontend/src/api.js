@@ -68,6 +68,12 @@ export const getMaeAnalysis      = (symbol, start_month, start_day, holding_days
 export const getSimilarYears     = (symbol, start_month, start_day, holding_days, n_similar = 5) =>
   _get("/api/analysis/similar-years", { symbol, start_month, start_day, holding_days, n_similar });
 
+export const getVolumeAnalysis   = (symbol, start_month, start_day, holding_days) =>
+  _get("/api/analysis/volume", { symbol, start_month, start_day, holding_days });
+
+export const getEntrySensitivity = (start_month, start_day, holding_days, min_return = 12, top_n = 20, universe = "NIFTY500") =>
+  _get("/api/analysis/sensitivity", { start_month, start_day, holding_days, min_return, top_n, universe });
+
 // ── AI Commentary ─────────────────────────────────────────────────────────────
 
 export const getAiCommentary = (sym_name, win_label, summary, today_features = null, similar_years = null) =>
