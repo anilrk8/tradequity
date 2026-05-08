@@ -175,6 +175,11 @@ def get_seasonal_analysis(
     """
     results_df, summary = seasonal_analysis(symbol, start_month, start_day, holding_days, min_return)
     if results_df is None:
+        if summary and summary.get("error") == "insufficient_years":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Insufficient history: only {summary.get('years_found', 0)} completed window(s) found (need at least 3).",
+            )
         raise HTTPException(status_code=404, detail="No data found for this symbol/window.")
 
     clean = _clean_summary(summary)

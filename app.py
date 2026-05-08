@@ -359,7 +359,15 @@ def tab_stock_analysis():
             results_df, summary = seasonal_analysis(symbol, sm, sd, holding_days, min_return)
 
         if results_df is None:
-            _no_data_warning()
+            if summary and summary.get("error") == "insufficient_years":
+                yrs = summary.get("years_found", 0)
+                st.warning(
+                    f"Not enough historical data for seasonal analysis — only **{yrs}** completed "
+                    f"window(s) found (need at least 3). This stock may be recently listed. "
+                    f"Try again after more history accumulates."
+                )
+            else:
+                _no_data_warning()
             return
 
         st.session_state["sa_results_df"] = results_df
@@ -786,7 +794,7 @@ def _render_window_best_stocks():
                 for sym in top_symbols:
                     _, summary = seasonal_analysis(sym, o_sm, o_sd, holding_days, min_return)
                     sensitivity_rows[sym].append(
-                        summary["target_met_count"] if summary else 0
+                        summary.get("target_met_count", 0) if (summary and "error" not in summary) else 0
                     )
 
         # Build DataFrame

@@ -189,7 +189,7 @@ def seasonal_analysis(
             raw_results.append(r)
 
     if len(raw_results) < 3:
-        return None, None
+        return None, {"error": "insufficient_years", "years_found": len(raw_results)}
 
     norm_series_map = {r["year"]: r.pop("_norm") for r in raw_results}
 
@@ -250,7 +250,7 @@ def sector_seasonal_analysis(
     rows = []
     for symbol in symbols:
         _, summary = seasonal_analysis(symbol, start_month, start_day, holding_days, min_return_pct)
-        if summary:
+        if summary and "error" not in summary:
             rows.append(
                 {
                     "Symbol":              symbol,
@@ -351,7 +351,7 @@ def universe_screener(
         _, summary = seasonal_analysis(
             symbol, start_month, start_day, holding_days, min_return_pct
         )
-        if summary:
+        if summary and "error" not in summary:
             rows.append(
                 {
                     "Symbol":              symbol,
