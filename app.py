@@ -20,7 +20,7 @@ import streamlit as st
 from src.analyzer import (
     best_windows_for_stock, seasonal_analysis, sector_seasonal_analysis, universe_screener,
     monthly_return_heatmap, excess_return_vs_nifty, sector_rotation_analysis,
-    mae_analysis, stop_loss_survival, similar_years_analysis,
+    mae_analysis, stop_loss_survival, similar_years_analysis, volume_analysis,
 )
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
@@ -1562,6 +1562,236 @@ def _render_mae_analysis():
         )
 
 
+def _render_volume_analysis():
+    st.caption(
+        "Volume-based analytics for the selected stock across its full history. "
+        "Pick a stock and an entry window to see whether volume confirms seasonal price moves."
+    )
+
+    col_s, col_w = st.columns([1, 3])
+    with col_s:
+        _, symbol = _stock_selector("va")
+    with col_w:
+        sm, sd, holding_days, _ = _entry_inputs("va")
+
+    if st.button("Run Volume Analysis →", type="primary", key="va_go"):
+        with st.spinner("Computing volume metrics…"):
+            result = volume_analysis(symbol, sm, sd, holding_days)
+        if result is None:
+            st.warning("No volume data available for this stock.")
+            return
+        st.session_state["va_result"]   = result
+        st.session_state["_va_symbol"]  = symbol
+        st.session_state["_va_sm"]      = sm
+        st.session_state["_va_sd"]      = sd
+        st.session_state["_va_hold"]    = holding_days
+
+    if "va_result" not in st.session_state:
+        return
+
+    result       = st.session_state["va_result"]
+    symbol       = st.session_state["_va_symbol"]
+    sm           = st.session_state["_va_sm"]
+    sd           = st.session_state["_va_sd"]
+    holding_days = st.session_state["_va_hold"]
+
+    sym_name     = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+    win_label    = _window_label(sm, sd, holding_days)
+    summary      = result["summary"]
+    window_df    = result["window_df"]
+    monthly_df   = result["monthly_vol_df"]
+    obv_by_year  = result["obv_by_year"]
+
+    st.divider()
+    st.markdown(f"### {sym_name} &nbsp;·&nbsp; {win_label}")
+
+    # ── Summary metrics ────────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Vol-Confirmed Entries",
+        f"{summary['vol_confirmed_entries']} / {summary['total_years']}",
+        delta=f"{summary['vol_confirmed_pct']}% of years",
+        help="Entry days where volume was above its 20-day average (strong conviction signal)",
+    )
+    c2.metric(
+        "Avg Return — Vol Confirmed",
+        f"{summary['avg_return_vol_confirmed']:+.2f}%" if summary["avg_return_vol_confirmed"] is not None else "—",
+        help="Average window return in years where entry volume was above average",
+    )
+    c3.metric(
+        "Avg Return — Low Volume Entry",
+        f"{summary['avg_return_unconfirmed']:+.2f}%" if summary["avg_return_unconfirmed"] is not None else "—",
+        help="Average window return in years where entry volume was below average",
+    )
+    c4.metric(
+        "Weak-Vol Rallies (Divergence)",
+        summary["divergence_count"],
+        help="Years where price went UP but window avg volume was <85% of baseline — unreliable rally",
+    )
+
+    st.divider()
+    t1, t2, t3, t4 = st.tabs([
+        "📅 Seasonal Volume Rhythm",
+        "📊 Volume vs Return by Year",
+        "📈 OBV During Window",
+        "🗃 Raw Data",
+    ])
+
+    # ── Tab 1: Seasonal volume rhythm ─────────────────────────────────────────
+    with t1:
+        st.caption(
+            "Average normalised trading volume for each calendar month across all history.  "
+            "**1.0 = normal volume.** Values above 1 mean that month is unusually active.  "
+            "Useful for spotting which months have the highest market participation — "
+            "high-volume months tend to produce more reliable price moves."
+        )
+        monthly_valid = monthly_df.dropna(subset=["Avg Normalised Volume"])
+        fig_month = px.bar(
+            monthly_valid,
+            x="Month", y="Avg Normalised Volume",
+            color="Avg Normalised Volume",
+            color_continuous_scale="RdYlGn",
+            range_color=[0.5, 1.5],
+            text=monthly_valid["Avg Normalised Volume"].apply(lambda x: f"{x:.2f}"),
+            title=f"{sym_name} — Seasonal Volume Rhythm (monthly avg, normalised to 90-day baseline)",
+        )
+        fig_month.add_hline(y=1.0, line_dash="dash", line_color="#888",
+                            annotation_text="Baseline (1.0)", annotation_position="right")
+        fig_month.update_traces(textposition="outside")
+        fig_month.update_layout(height=400, plot_bgcolor="white", paper_bgcolor="white",
+                                coloraxis_showscale=False)
+        st.plotly_chart(fig_month, use_container_width=True)
+
+    # ── Tab 2: Volume vs Return by year ───────────────────────────────────────
+    with t2:
+        st.caption(
+            "Each bar = one historical year.  "
+            "**Entry Vol Ratio** = entry-day volume ÷ its 20-day average (>1 = high-volume entry).  "
+            "**Window Avg Vol Ratio** = mean daily volume during the window ÷ 90-day baseline (>1 = accumulation).  "
+            "Green return = price went up. Orange = price went down."
+        )
+        fig_ev = go.Figure()
+        colors_ret = ["#27ae60" if d == "UP" else "#e74c3c" for d in window_df["Direction"]]
+        fig_ev.add_trace(go.Bar(
+            name="Return %",
+            x=window_df["Year"].astype(str),
+            y=window_df["Return %"],
+            marker_color=colors_ret,
+            yaxis="y1",
+            text=window_df["Return %"].apply(lambda x: f"{x:+.1f}%"),
+            textposition="outside",
+        ))
+        fig_ev.add_trace(go.Scatter(
+            name="Entry Vol Ratio",
+            x=window_df["Year"].astype(str),
+            y=window_df["Entry Vol Ratio"],
+            mode="lines+markers",
+            line=dict(color="#2980b9", width=2),
+            marker=dict(size=7),
+            yaxis="y2",
+        ))
+        fig_ev.add_trace(go.Scatter(
+            name="Window Avg Vol Ratio",
+            x=window_df["Year"].astype(str),
+            y=window_df["Window Avg Vol Ratio"],
+            mode="lines+markers",
+            line=dict(color="#8e44ad", width=2, dash="dot"),
+            marker=dict(size=7),
+            yaxis="y2",
+        ))
+        fig_ev.update_layout(
+            title=f"{sym_name} — Return vs Volume Confirmation  ·  {win_label}",
+            height=440,
+            plot_bgcolor="white", paper_bgcolor="white",
+            xaxis=dict(title="Year"),
+            yaxis=dict(title="Return %", side="left"),
+            yaxis2=dict(title="Volume Ratio (1.0 = avg)", overlaying="y", side="right",
+                        zeroline=False),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        fig_ev.add_hline(y=1.0, line_dash="dash", line_color="#aaa", yref="y2")
+        st.plotly_chart(fig_ev, use_container_width=True)
+
+        # Volume confirmation vs return comparison
+        if summary["avg_return_vol_confirmed"] is not None and summary["avg_return_unconfirmed"] is not None:
+            diff = summary["avg_return_vol_confirmed"] - summary["avg_return_unconfirmed"]
+            if diff > 0:
+                st.success(
+                    f"**Volume-confirmed entries outperformed** by **{diff:+.2f}%** on average "
+                    f"({summary['avg_return_vol_confirmed']:+.2f}% vs {summary['avg_return_unconfirmed']:+.2f}%). "
+                    f"This suggests watching for high-volume entry days in this window."
+                )
+            else:
+                st.info(
+                    f"Low-volume entries had similar or better returns "
+                    f"({summary['avg_return_unconfirmed']:+.2f}% vs {summary['avg_return_vol_confirmed']:+.2f}%). "
+                    f"Volume confirmation may not add edge for this stock/window."
+                )
+
+        if summary["divergence_count"] > 0:
+            div_years = window_df.loc[window_df["Vol-Price Divergence"], "Year"].tolist()
+            st.warning(
+                f"**Price-Volume Divergence detected in {summary['divergence_count']} year(s): "
+                f"{', '.join(str(y) for y in div_years)}** — price rose but volume was well below average. "
+                f"These rallies may have been less sustainable."
+            )
+
+    # ── Tab 3: OBV within window ──────────────────────────────────────────────
+    with t3:
+        st.caption(
+            "**On-Balance Volume (OBV)** accumulated *within* the entry window for each historical year.  "
+            "Rising OBV = buying pressure dominated. Falling OBV = selling pressure.  "
+            "Normalised to avg daily volume so different absolute price levels are comparable.  "
+            "Green = profitable year, Red = losing year."
+        )
+        fig_obv = go.Figure()
+        for year, obv_vals in obv_by_year.items():
+            row = window_df[window_df["Year"] == year]
+            direction = row["Direction"].iloc[0] if not row.empty else "UP"
+            is_up = direction == "UP"
+            fig_obv.add_trace(go.Scatter(
+                x=list(range(len(obv_vals))),
+                y=obv_vals,
+                mode="lines",
+                name=str(year),
+                line=dict(
+                    color="rgba(39,174,96,0.55)"  if is_up else "rgba(231,76,60,0.45)",
+                    width=1.5,
+                ),
+                hovertemplate=f"<b>{year}</b><br>Day %{{x}}<br>OBV %{{y:.1f}}x avg vol<extra></extra>",
+            ))
+        fig_obv.add_hline(y=0, line_dash="dash", line_color="#888")
+        fig_obv.update_layout(
+            title=f"{sym_name} — OBV within Window (normalised)  ·  {win_label}",
+            height=440,
+            plot_bgcolor="white", paper_bgcolor="white",
+            xaxis_title="Trading Day in Window",
+            yaxis_title="Cumulative OBV (× avg daily vol)",
+            showlegend=True,
+            legend=dict(font=dict(size=10)),
+        )
+        st.plotly_chart(fig_obv, use_container_width=True)
+        st.caption("**Green lines** = years that ended profitable · **Red lines** = years that ended in a loss")
+
+    # ── Tab 4: Raw data ────────────────────────────────────────────────────────
+    with t4:
+        st.dataframe(
+            window_df.style
+                .background_gradient(subset=["Return %"], cmap="RdYlGn", vmin=-30, vmax=30)
+                .background_gradient(subset=["Entry Vol Ratio", "Window Avg Vol Ratio"],
+                                     cmap="Blues", vmin=0.5, vmax=2.0)
+                .format({
+                    "Return %":             "{:+.2f}%",
+                    "Entry Vol Ratio":      "{:.2f}x",
+                    "Window Avg Vol Ratio": "{:.2f}x",
+                })
+                .applymap(lambda v: "background-color: #fff3cd" if v is True else "",
+                          subset=["Vol-Price Divergence"]),
+            use_container_width=True,
+            height=500,
+        )
+
+
 def tab_deep_insights():
     st.subheader("Deep Insights")
     st.caption(
@@ -1569,12 +1799,13 @@ def tab_deep_insights():
         "Download market indices first (Data Management tab) to unlock "
         "Excess vs NIFTY and the VIX overlay."
     )
-    sub1, sub2, sub3, sub4, sub5 = st.tabs([
+    sub1, sub2, sub3, sub4, sub5, sub6 = st.tabs([
         "📅 Monthly Heatmap",
         "📊 Excess vs NIFTY",
         "🔄 Sector Rotation",
         "🛡 MAE & Stop-Loss",
         "🔭 Similar Years",
+        "📦 Volume Analysis",
     ])
     with sub1:
         _render_monthly_heatmap()
@@ -1586,6 +1817,8 @@ def tab_deep_insights():
         _render_mae_analysis()
     with sub5:
         _render_similar_years()
+    with sub6:
+        _render_volume_analysis()
 
 
 # ─── Tab 5 — Data Management ──────────────────────────────────────────────────

@@ -863,3 +863,170 @@ def similar_years_analysis(
         "similar_years":   similar,
         "missing_indices": False,
     }
+
+
+# ─── Volume Analysis ───────────────────────────────────────────────────────────
+
+def volume_analysis(
+    symbol: str,
+    start_month: int,
+    start_day: int,
+    holding_days: int,
+) -> dict | None:
+    """
+    Volume-based analytics for a stock across its full history.
+
+    Returns a dict with four DataFrames / Series:
+
+    monthly_avg_vol : dict {month_name -> avg_normalised_volume}
+        Normalised = each day's volume / trailing 90-day avg volume.
+        Gives the seasonal calendar rhythm of trading activity.
+
+    window_rows : DataFrame  (one row per historical year in the entry window)
+        Year, return_pct, entry_vol_ratio (entry day vol / 20d avg),
+        window_avg_vol_ratio (mean vol in window / 90d baseline),
+        direction, volume_confirmed (True if entry vol > 1.0)
+
+    obv_by_year : dict {year -> list of cumulative OBV values normalised to 0 at entry}
+        On-Balance Volume within each year's window.
+
+    monthly_vol_df : DataFrame  (month x avg_normalised_volume, for bar chart)
+    """
+    conn = get_connection()
+    df = _load_closes(symbol, conn)
+    conn.close()
+
+    if df.empty or "volume" not in df.columns:
+        return None
+
+    # Drop rows with null volume
+    df = df.dropna(subset=["volume"])
+    if len(df) < 100:
+        return None
+
+    # ── 1. Seasonal volume rhythm: normalised vol by calendar month ────────────
+    # For each trading day compute vol / trailing 90-day avg vol (excluding same day)
+    df = df.copy()
+    df["vol_90d_avg"] = (
+        df["volume"].rolling(window=90, min_periods=20).mean().shift(1)
+    )
+    df["vol_norm"] = df["volume"] / df["vol_90d_avg"]
+
+    monthly_vol = {}
+    for m in range(1, 13):
+        vals = df.loc[df.index.month == m, "vol_norm"].dropna()
+        monthly_vol[_month_abbr(m)] = round(float(vals.mean()), 3) if len(vals) > 0 else None
+
+    monthly_vol_df = pd.DataFrame(
+        [{"Month": k, "Avg Normalised Volume": v} for k, v in monthly_vol.items()]
+    )
+
+    # ── 2. Window-level volume stats per year ─────────────────────────────────
+    # 20-day rolling avg for entry-day confirmation
+    df["vol_20d_avg"] = (
+        df["volume"].rolling(window=20, min_periods=5).mean().shift(1)
+    )
+
+    years = sorted(df.index.year.unique())
+    window_rows = []
+    obv_by_year = {}
+
+    for year in years:
+        r = _window_return_by_days(df, year, start_month, start_day, holding_days)
+        if r is None:
+            continue
+
+        entry_date = pd.Timestamp(r["start_date"])
+        end_date   = pd.Timestamp(r["end_date"])
+        window_df  = df[(df.index >= entry_date) & (df.index <= end_date)].copy()
+
+        if len(window_df) < 5:
+            continue
+
+        # Entry-day volume confirmation
+        entry_row = df[df.index == entry_date]
+        if entry_row.empty:
+            # snap to first available day (matching _window_return_by_days logic)
+            entry_row = df[df.index >= entry_date].head(1)
+
+        entry_vol       = float(entry_row["volume"].iloc[0]) if not entry_row.empty else np.nan
+        entry_20d_avg   = float(entry_row["vol_20d_avg"].iloc[0]) if not entry_row.empty else np.nan
+        entry_vol_ratio = round(entry_vol / entry_20d_avg, 3) if entry_20d_avg > 0 else None
+
+        # Window average vol vs 90-day baseline (baseline = avg of vol_90d_avg within window)
+        baseline        = window_df["vol_90d_avg"].dropna()
+        window_avg_vol  = float(window_df["volume"].mean())
+        baseline_avg    = float(baseline.mean()) if not baseline.empty else np.nan
+        window_vol_ratio = round(window_avg_vol / baseline_avg, 3) if baseline_avg > 0 else None
+
+        ret = r["return_pct"]
+
+        window_rows.append({
+            "Year":                   year,
+            "Return %":               ret,
+            "Direction":              "UP" if ret > 0 else "DOWN",
+            "Entry Vol Ratio":        entry_vol_ratio,   # >1 = high vol entry
+            "Window Avg Vol Ratio":   window_vol_ratio,  # >1 = accumulation
+            "Vol Confirmed Entry":    (entry_vol_ratio or 0) >= 1.0,
+            "Accumulation Window":    (window_vol_ratio or 0) >= 1.0,
+            "Vol-Price Divergence":   ret > 0 and (window_vol_ratio or 1.0) < 0.85,
+        })
+
+        # ── OBV within window ─────────────────────────────────────────────────
+        obv = [0.0]
+        prev_close = float(window_df["close"].iloc[0])
+        for _, row in window_df.iloc[1:].iterrows():
+            curr_close = float(row["close"])
+            vol        = float(row["volume"])
+            if curr_close > prev_close:
+                obv.append(obv[-1] + vol)
+            elif curr_close < prev_close:
+                obv.append(obv[-1] - vol)
+            else:
+                obv.append(obv[-1])
+            prev_close = curr_close
+
+        # Normalise OBV to % of avg daily volume so different stocks are comparable
+        avg_vol = float(window_df["volume"].mean())
+        if avg_vol > 0:
+            obv_norm = [round(v / avg_vol, 3) for v in obv]
+        else:
+            obv_norm = obv
+        obv_by_year[year] = obv_norm
+
+    if not window_rows:
+        return None
+
+    window_df_out = pd.DataFrame(window_rows)
+
+    # ── 3. Summary signals ────────────────────────────────────────────────────
+    n = len(window_df_out)
+    confirmed        = int(window_df_out["Vol Confirmed Entry"].sum())
+    confirmed_up     = int((window_df_out["Vol Confirmed Entry"] & (window_df_out["Direction"] == "UP")).sum())
+    unconfirmed_up   = int((~window_df_out["Vol Confirmed Entry"] & (window_df_out["Direction"] == "UP")).sum())
+    divergence_count = int(window_df_out["Vol-Price Divergence"].sum())
+    accumulation     = int(window_df_out["Accumulation Window"].sum())
+
+    avg_ret_confirmed   = window_df_out.loc[window_df_out["Vol Confirmed Entry"],  "Return %"].mean()
+    avg_ret_unconfirmed = window_df_out.loc[~window_df_out["Vol Confirmed Entry"], "Return %"].mean()
+
+    summary = {
+        "total_years":              n,
+        "vol_confirmed_entries":    confirmed,
+        "vol_confirmed_pct":        round(confirmed / n * 100, 1) if n > 0 else 0,
+        "confirmed_up":             confirmed_up,
+        "unconfirmed_up":           unconfirmed_up,
+        "accumulation_windows":     accumulation,
+        "accumulation_pct":         round(accumulation / n * 100, 1) if n > 0 else 0,
+        "divergence_count":         divergence_count,
+        "avg_return_vol_confirmed": round(float(avg_ret_confirmed),   2) if not np.isnan(avg_ret_confirmed)   else None,
+        "avg_return_unconfirmed":   round(float(avg_ret_unconfirmed), 2) if not np.isnan(avg_ret_unconfirmed) else None,
+    }
+
+    return {
+        "symbol":         symbol,
+        "monthly_vol_df": monthly_vol_df,
+        "window_df":      window_df_out,
+        "obv_by_year":    obv_by_year,
+        "summary":        summary,
+    }
