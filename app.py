@@ -2008,6 +2008,321 @@ def tab_data_management():
             st.caption("No custom tickers added yet.")
 
 
+# ─── Dashboard Tab ────────────────────────────────────────────────────────────
+
+def tab_dashboard():
+    st.subheader("Trade Dashboard")
+    st.caption(
+        "One-stop view of all key analysis for a stock and entry window. "
+        "Select your stock, entry date, holding period and target — then click **Run All**."
+    )
+
+    col_s, col_w = st.columns([1, 3])
+    with col_s:
+        _, symbol = _stock_selector("db")
+    with col_w:
+        sm, sd, holding_days, min_return = _entry_inputs("db")
+
+    if st.button("▶ Run All Analysis", type="primary", key="db_run"):
+        sym_name  = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+        win_label = _window_label(sm, sd, holding_days)
+        errors    = {}
+
+        with st.spinner(f"Running full analysis for {sym_name}  ·  {win_label}…"):
+            try:
+                db_res_df, db_summary = seasonal_analysis(symbol, sm, sd, holding_days, min_return)
+            except Exception as e:
+                db_res_df, db_summary = None, None
+                errors["seasonal"] = str(e)
+
+            try:
+                db_bw_df = best_windows_for_stock(symbol, int(holding_days), float(min_return))
+            except Exception as e:
+                db_bw_df = None
+                errors["best_windows"] = str(e)
+
+            try:
+                db_pivot = monthly_return_heatmap(symbol)
+            except Exception as e:
+                db_pivot = None
+                errors["heatmap"] = str(e)
+
+            try:
+                db_ev_df, db_ev_sum = excess_return_vs_nifty(symbol, sm, sd, holding_days, min_return)
+            except Exception as e:
+                db_ev_df, db_ev_sum = None, None
+                errors["excess"] = str(e)
+
+            try:
+                db_vol = volume_analysis(symbol, sm, sd, holding_days)
+            except Exception as e:
+                db_vol = None
+                errors["volume"] = str(e)
+
+        st.session_state["db_res_df"]  = db_res_df
+        st.session_state["db_summary"] = db_summary
+        st.session_state["db_bw_df"]   = db_bw_df
+        st.session_state["db_pivot"]   = db_pivot
+        st.session_state["db_ev_df"]   = db_ev_df
+        st.session_state["db_ev_sum"]  = db_ev_sum
+        st.session_state["db_vol"]     = db_vol
+        st.session_state["_db_symbol"] = symbol
+        st.session_state["_db_sm"]     = sm
+        st.session_state["_db_sd"]     = sd
+        st.session_state["_db_hold"]   = holding_days
+        st.session_state["_db_minret"] = min_return
+        st.session_state["_db_errors"] = errors
+
+    if "_db_symbol" not in st.session_state:
+        return
+
+    db_res_df    = st.session_state["db_res_df"]
+    db_summary   = st.session_state["db_summary"]
+    db_bw_df     = st.session_state["db_bw_df"]
+    db_pivot     = st.session_state["db_pivot"]
+    db_ev_df     = st.session_state["db_ev_df"]
+    db_ev_sum    = st.session_state["db_ev_sum"]
+    db_vol       = st.session_state["db_vol"]
+    symbol       = st.session_state["_db_symbol"]
+    sm           = st.session_state["_db_sm"]
+    sd           = st.session_state["_db_sd"]
+    holding_days = st.session_state["_db_hold"]
+    min_return   = st.session_state["_db_minret"]
+    errors       = st.session_state["_db_errors"]
+
+    sym_name  = get_symbol_to_name(UNIVERSE).get(symbol, symbol)
+    win_label = _window_label(sm, sd, holding_days)
+
+    for err_key, err_msg in errors.items():
+        st.warning(f"⚠ {err_key}: {err_msg}")
+
+    st.divider()
+    st.markdown(f"## {sym_name}  ·  {win_label}  ·  Target ≥{min_return:.0f}%")
+
+    # ── Seasonal summary metrics ───────────────────────────────────────────────
+    if db_summary and "error" not in db_summary:
+        if db_summary.get("low_sample_warning"):
+            st.warning(
+                f"⚠ Limited history — only {db_summary['total_instances']} completed "
+                f"window(s). Treat results with caution."
+            )
+        _metric_row(db_summary)
+    elif db_res_df is None:
+        st.info("No seasonal data found for this stock/window.")
+
+    st.divider()
+
+    # ── Price Trend Fan Chart  +  Year-by-Year Returns ────────────────────────
+    st.markdown("### 📈 Price Trend  &  Year-by-Year Returns")
+
+    if db_res_df is not None and db_summary and "error" not in db_summary:
+        summary_copy = dict(db_summary)
+        norm_map = summary_copy.pop("norm_series_map")
+        col_fan, col_bar = st.columns(2)
+        with col_fan:
+            fig_fan = _fan_chart(
+                db_res_df, norm_map,
+                f"{sym_name} — Price Path  ·  {win_label}",
+                min_return,
+            )
+            fig_fan.update_layout(height=380, margin=dict(t=60))
+            st.plotly_chart(fig_fan, use_container_width=True)
+        with col_bar:
+            fig_bar = _bar_chart(
+                db_res_df, min_return,
+                f"{sym_name} — Returns by Year",
+            )
+            fig_bar.update_layout(height=380, margin=dict(t=60))
+            st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        st.info("Seasonal analysis not available for this stock/window.")
+
+    st.divider()
+
+    # ── Best Entry Windows ────────────────────────────────────────────────────
+    st.markdown("### 🔍 Best Entry Windows (All 12 Months)")
+
+    if db_bw_df is not None:
+        fig_bw = px.bar(
+            db_bw_df, x="Window", y="Target Met (yrs)",
+            color="Target Met (yrs)",
+            color_continuous_scale="RdYlGn",
+            range_color=[0, db_bw_df["Out of (yrs)"].max()],
+            title=f"{sym_name} — Years ≥{min_return:.0f}% Met by Entry Month  ·  +{holding_days}d hold",
+            text="Target Met (yrs)",
+        )
+        fig_bw.update_traces(texttemplate="%{text}", textposition="outside")
+        fig_bw.update_layout(
+            height=340, margin=dict(t=60),
+            xaxis_tickangle=-30,
+            plot_bgcolor="white", paper_bgcolor="white",
+            coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig_bw, use_container_width=True)
+
+        top3 = db_bw_df.head(3)
+        medals = ["🥇", "🥈", "🥉"]
+        cols = st.columns(3)
+        for i, (col, (_, row)) in enumerate(zip(cols, top3.iterrows())):
+            col.metric(
+                f"{medals[i]} {row['Window']}",
+                f"{row['Target Met (yrs)']} of {row['Out of (yrs)']} yrs",
+                delta=f"Avg {row['Avg Return %']:+.2f}%",
+            )
+    else:
+        st.info("Best windows data not available.")
+
+    st.divider()
+
+    # ── Monthly Rhythm  +  Excess vs NIFTY ───────────────────────────────────
+    st.markdown("### 📅 Monthly Rhythm  &  📊 Excess vs NIFTY")
+
+    col_heat, col_excess = st.columns(2)
+
+    with col_heat:
+        if db_pivot is not None:
+            avg_by_month = db_pivot.mean(axis=0).reset_index()
+            avg_by_month.columns = ["Month", "Avg Return %"]
+            avg_by_month["Avg Return %"] = avg_by_month["Avg Return %"].round(2)
+            colors_m = ["#27ae60" if v >= 0 else "#e74c3c" for v in avg_by_month["Avg Return %"]]
+            fig_heat = go.Figure(go.Bar(
+                x=avg_by_month["Month"],
+                y=avg_by_month["Avg Return %"],
+                marker_color=colors_m,
+                text=[f"{v:+.1f}%" for v in avg_by_month["Avg Return %"]],
+                textposition="outside",
+            ))
+            fig_heat.add_hline(y=0, line_color="#333", line_width=1)
+            fig_heat.update_layout(
+                title=f"{sym_name} — Avg Monthly Return",
+                height=340, margin=dict(t=60),
+                plot_bgcolor="white", paper_bgcolor="white",
+                xaxis_title="Month", yaxis_title="Avg Return %",
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+        else:
+            st.info("Monthly heatmap data not available.")
+
+    with col_excess:
+        if db_ev_df is not None and db_ev_sum and db_ev_sum.get("nifty_available"):
+            exc = db_ev_df.dropna(subset=["excess_return"])
+            exc_colors = ["#27ae60" if v > 0 else "#e74c3c" for v in exc["excess_return"]]
+            avg_exc = db_ev_sum.get("avg_excess_return")
+            fig_exc = go.Figure(go.Bar(
+                x=exc["year"].astype(str),
+                y=exc["excess_return"],
+                marker_color=exc_colors,
+                text=[f"{v:+.1f}%" for v in exc["excess_return"]],
+                textposition="outside",
+            ))
+            fig_exc.add_hline(y=0, line_color="#333", line_width=1)
+            if avg_exc is not None:
+                fig_exc.add_hline(
+                    y=avg_exc, line_dash="dash", line_color="#9b59b6",
+                    annotation_text=f"Avg {avg_exc:+.1f}%",
+                    annotation_position="top right",
+                )
+            fig_exc.update_layout(
+                title=f"Excess Return vs NIFTY  ·  {win_label}",
+                height=340, margin=dict(t=60),
+                plot_bgcolor="white", paper_bgcolor="white",
+                xaxis_title="Year", yaxis_title="Excess Return %",
+                xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_exc, use_container_width=True)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avg Stock Return",  f"{db_ev_sum['avg_stock_return']:+.2f}%")
+            c2.metric("Avg NIFTY Return",  f"{db_ev_sum['avg_nifty_return']:+.2f}%")
+            c3.metric("Avg Excess",
+                      f"{avg_exc:+.2f}%" if avg_exc is not None else "—",
+                      delta=db_ev_sum.get("beat_index_label"))
+        elif not has_index_data():
+            st.info("Download market indices (Data Management → Market Indices) to see Excess vs NIFTY.")
+        else:
+            st.info("Excess vs NIFTY data not available.")
+
+    st.divider()
+
+    # ── Volume Analysis ───────────────────────────────────────────────────────
+    st.markdown("### 📦 Volume Analysis")
+
+    if db_vol is not None:
+        vol_sum     = db_vol["summary"]
+        monthly_vol = db_vol["monthly_vol_df"]
+        window_rows = db_vol["window_df"]
+
+        col_v1, col_v2 = st.columns(2)
+
+        with col_v1:
+            month_order = ["Jan","Feb","Mar","Apr","May","Jun",
+                           "Jul","Aug","Sep","Oct","Nov","Dec"]
+            ordered_vol = monthly_vol.set_index("Month").reindex(month_order).reset_index()
+            vol_colors  = ["#27ae60" if (v or 0) >= 1 else "#e74c3c"
+                           for v in ordered_vol["Avg Normalised Volume"]]
+            fig_vrhy = go.Figure(go.Bar(
+                x=ordered_vol["Month"],
+                y=ordered_vol["Avg Normalised Volume"],
+                marker_color=vol_colors,
+                text=[f"{v:.2f}×" if pd.notna(v) else "—"
+                      for v in ordered_vol["Avg Normalised Volume"]],
+                textposition="outside",
+            ))
+            fig_vrhy.add_hline(y=1.0, line_dash="dash", line_color="#888",
+                               annotation_text="Baseline (1.0)", annotation_position="right")
+            fig_vrhy.update_layout(
+                title=f"{sym_name} — Seasonal Volume Rhythm",
+                height=320, margin=dict(t=60),
+                plot_bgcolor="white", paper_bgcolor="white",
+                xaxis_title="Month", yaxis_title="Normalised Volume (×)",
+            )
+            st.plotly_chart(fig_vrhy, use_container_width=True)
+
+        with col_v2:
+            conf_ret   = vol_sum.get("avg_return_vol_confirmed")
+            unconf_ret = vol_sum.get("avg_return_unconfirmed")
+            if conf_ret is not None and unconf_ret is not None:
+                comp_df = pd.DataFrame([
+                    {"Category": "High-Vol Entry", "Avg Return %": conf_ret},
+                    {"Category": "Low-Vol Entry",  "Avg Return %": unconf_ret},
+                ])
+                fig_vcomp = go.Figure(go.Bar(
+                    x=comp_df["Category"],
+                    y=comp_df["Avg Return %"],
+                    marker_color=["#2980b9", "#95a5a6"],
+                    text=[f"{v:+.2f}%" for v in comp_df["Avg Return %"]],
+                    textposition="outside",
+                    width=0.4,
+                ))
+                fig_vcomp.add_hline(y=0, line_color="#333", line_width=1)
+                fig_vcomp.update_layout(
+                    title="Avg Return: High vs Low Volume Entry",
+                    height=320, margin=dict(t=60),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    yaxis_title="Avg Return %",
+                )
+                st.plotly_chart(fig_vcomp, use_container_width=True)
+
+        cv1, cv2, cv3, cv4 = st.columns(4)
+        cv1.metric("Vol-Confirmed Entries",
+                   f"{vol_sum['vol_confirmed_entries']} / {vol_sum['total_years']}",
+                   delta=f"{vol_sum['vol_confirmed_pct']}% of years")
+        cv2.metric("Accumulation Windows",
+                   f"{vol_sum['accumulation_windows']} / {vol_sum['total_years']}")
+        cv3.metric("Avg Return (High-Vol Entry)",
+                   f"{conf_ret:+.2f}%" if conf_ret is not None else "—")
+        cv4.metric("Price-Vol Divergence Yrs", vol_sum["divergence_count"])
+
+        div_years = window_rows.loc[window_rows["Vol-Price Divergence"], "Year"].tolist()
+        if div_years:
+            st.warning(
+                f"⚠ Price-Volume Divergence in {len(div_years)} year(s): "
+                f"{', '.join(str(y) for y in div_years)} — "
+                f"price went up on below-average volume. Weaker-conviction rallies."
+            )
+    else:
+        st.info("Volume analysis data not available for this stock/window.")
+
+
 # ─── App shell ────────────────────────────────────────────────────────────────
 
 def main():
@@ -2028,21 +2343,24 @@ def main():
             icon="⚠",
         )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["📊  Stock Analysis", "🏭  Sector Analysis",
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["🎯  Dashboard",
+         "📊  Stock Analysis", "🏭  Sector Analysis",
          "🔍  Best Windows",  "📉  Deep Insights",
          "🗄  Data Management"]
     )
 
     with tab1:
-        tab_stock_analysis()
+        tab_dashboard()
     with tab2:
-        tab_sector_analysis()
+        tab_stock_analysis()
     with tab3:
-        tab_best_windows()
+        tab_sector_analysis()
     with tab4:
-        tab_deep_insights()
+        tab_best_windows()
     with tab5:
+        tab_deep_insights()
+    with tab6:
         tab_data_management()
 
 
