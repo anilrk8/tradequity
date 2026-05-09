@@ -6,6 +6,25 @@ To expand: populate NIFTY500_STOCKS with the same dict format and switch
 the UNIVERSE variable in app.py to "NIFTY500".
 """
 
+def _get_custom_stocks_from_db() -> list[dict]:
+    """Read universe='CUSTOM' stocks from SQLite. Returns [] if DB unavailable."""
+    try:
+        from .db import get_connection
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT symbol, name, sector FROM stocks WHERE universe = 'CUSTOM' ORDER BY name"
+            )
+            return [
+                {"symbol": r[0], "name": r[1], "sector": r[2] or "Custom"}
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
 # ─── Nifty 50 ────────────────────────────────────────────────────────────────
 # Current constituents as of 2025/2026. Verify against NSE's official list
 # at https://www.nseindia.com/products-services/indices-nifty50-index
@@ -580,8 +599,15 @@ UNIVERSES: dict[str, list[dict]] = {
 
 
 def get_stocks(universe: str = "NIFTY50") -> list[dict]:
-    """Return all stock dicts for the given universe."""
-    return UNIVERSES.get(universe, NIFTY50_STOCKS)
+    """Return all stock dicts for the given universe, including any custom tickers."""
+    base = UNIVERSES.get(universe, NIFTY50_STOCKS)
+    custom = _get_custom_stocks_from_db()
+    if not custom:
+        return base
+    # Avoid duplicates: existing symbols in base take priority
+    existing_syms = {s["symbol"] for s in base}
+    extras = [c for c in custom if c["symbol"] not in existing_syms]
+    return base + extras
 
 
 def get_symbols(universe: str = "NIFTY50") -> list[str]:

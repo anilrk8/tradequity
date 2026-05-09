@@ -63,10 +63,7 @@ st.markdown(
 
 def _stock_selector(key_prefix: str = "") -> tuple[str, str]:
     stocks = get_stocks(UNIVERSE)
-    # Append any custom tickers registered via Data Management
-    custom = get_custom_tickers()
-    if custom:
-        stocks = stocks + [{"name": c["name"], "symbol": c["symbol"], "sector": "Custom"} for c in custom]
+    # Custom tickers are now merged into get_stocks() via the DB; no manual append needed
     display_opts = [f"{s['name']}  ({s['symbol']})" for s in stocks]
     sym_map      = {f"{s['name']}  ({s['symbol']})": s["symbol"] for s in stocks}
     choice = st.selectbox("Select Stock", display_opts, key=f"{key_prefix}_stock")
@@ -2029,8 +2026,13 @@ def tab_data_management():
         "Add any stock or index that isn't in the Nifty 500 universe. "
         "Use the Yahoo Finance ticker format: NSE stocks end with **.NS** "
         "(e.g. `TATAPOWER.NS`, `IRFC.NS`). Once added, the ticker appears in "
-        "all stock dropdowns for analysis."
+        "all stock dropdowns **and** the sector analysis for its assigned sector."
     )
+
+    _KNOWN_SECTORS = sorted({
+        s["sector"] for s in get_stocks(UNIVERSE)
+        if s["sector"] not in ("Custom", "")
+    })
 
     c_ct_left, c_ct_right = st.columns([1, 2])
 
@@ -2045,6 +2047,12 @@ def tab_data_management():
             placeholder="e.g. Tata Power",
             key="ct_name",
         )
+        ct_sector = st.selectbox(
+            "Sector",
+            options=["Custom"] + _KNOWN_SECTORS,
+            key="ct_sector",
+            help="Assign this stock to a sector so it appears in Sector Analysis.",
+        )
         ct_btn = st.button(
             "⬇  Fetch & Add",
             type="primary",
@@ -2055,7 +2063,7 @@ def tab_data_management():
 
         if ct_btn and ct_symbol.strip():
             with st.spinner(f"Fetching {ct_symbol.strip().upper()}…"):
-                rows, err = fetch_custom_ticker(ct_symbol, ct_name)
+                rows, err = fetch_custom_ticker(ct_symbol, ct_name, ct_sector)
             if err:
                 st.error(f"Failed: {err}")
             elif rows == 0:
@@ -2073,7 +2081,7 @@ def tab_data_management():
         if custom_list:
             st.dataframe(
                 pd.DataFrame(custom_list).rename(
-                    columns={"symbol": "Ticker", "name": "Name"}
+                    columns={"symbol": "Ticker", "name": "Name", "sector": "Sector"}
                 ),
                 use_container_width=True,
                 hide_index=True,

@@ -139,9 +139,6 @@ def _clean_summary(summary: dict) -> dict:
 def get_universe_stocks(universe: str = Query(default=UNIVERSE)):
     """Return the list of all stocks in the universe plus any custom tickers."""
     stocks = get_stocks(universe)
-    custom = get_custom_tickers()
-    if custom:
-        stocks = stocks + [{"name": c["name"], "symbol": c["symbol"], "sector": "Custom"} for c in custom]
     return {"stocks": stocks}
 
 
@@ -940,11 +937,12 @@ def trigger_custom_update():
 class AddTickerRequest(BaseModel):
     symbol: str
     name:   str = ""
+    sector: str = "Custom"
 
 
 @app.post("/api/data/add-ticker")
 def add_custom_ticker(req: AddTickerRequest):
-    rows, err = fetch_custom_ticker(req.symbol, req.name)
+    rows, err = fetch_custom_ticker(req.symbol, req.name, req.sector)
     if err:
         raise HTTPException(status_code=400, detail=err)
     return {"rows_fetched": rows, "symbol": req.symbol.strip().upper()}

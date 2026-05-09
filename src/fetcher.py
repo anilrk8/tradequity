@@ -151,7 +151,7 @@ def bulk_download(
 daily_update = bulk_download
 
 
-def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
+def fetch_custom_ticker(symbol: str, name: str, sector: str = "Custom") -> tuple[int, str | None]:
     """
     Register and download full OHLCV history for an arbitrary Yahoo Finance ticker.
 
@@ -176,10 +176,11 @@ def fetch_custom_ticker(symbol: str, name: str) -> tuple[int, str | None]:
     try:
         # Step 1: register (tentative — removed on failure)
         friendly_name = name.strip() if name.strip() else symbol
+        sector_clean  = sector.strip() if sector.strip() else "Custom"
         conn.execute(
             "INSERT OR REPLACE INTO stocks (symbol, name, sector, universe) "
             "VALUES (?, ?, ?, ?)",
-            (symbol, friendly_name, "Custom", "CUSTOM"),
+            (symbol, friendly_name, sector_clean, "CUSTOM"),
         )
         conn.commit()
 
@@ -225,9 +226,9 @@ def get_custom_tickers() -> list[dict]:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT symbol, name FROM stocks WHERE universe = 'CUSTOM' ORDER BY name"
+            "SELECT symbol, name, sector FROM stocks WHERE universe = 'CUSTOM' ORDER BY name"
         )
-        return [{"symbol": r[0], "name": r[1]} for r in cur.fetchall()]
+        return [{"symbol": r[0], "name": r[1], "sector": r[2] or "Custom"} for r in cur.fetchall()]
     finally:
         conn.close()
 
