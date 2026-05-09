@@ -82,7 +82,7 @@ def _entry_inputs(key_prefix: str = "") -> tuple[int, int, int, float]:
     c1, c2, c3 = st.columns([1, 1, 1])
 
     with c1:
-        default_date = datetime.date(datetime.date.today().year, 4, 1)
+        default_date = datetime.date.today()
         picked = st.date_input(
             "Entry Date (month & day matter; year ignored)",
             value=default_date,
@@ -2098,6 +2098,101 @@ def tab_dashboard():
 
     st.divider()
     st.markdown(f"## {sym_name}  ·  {win_label}  ·  Target ≥{min_return:.0f}%")
+
+    # ── Plain-English Snapshot ────────────────────────────────────────────────
+    _snap = []
+
+    # 1. Seasonal performance
+    if db_summary and "error" not in db_summary:
+        _avg  = db_summary.get("avg_return")
+        _best = db_summary.get("best_return")
+        _wrst = db_summary.get("worst_return")
+        _tot  = db_summary.get("total_instances", 0)
+        _hit  = db_summary.get("target_met_label", "—")
+        if _avg is not None:
+            _snap.append(
+                f"📊 **Seasonal Performance** — Hit ≥{min_return:.0f}% target in **{_hit}** "
+                f"across {_tot} completed window(s).  "
+                f"Avg return **{_avg:+.2f}%** | Best year **{_best:+.2f}%** | Worst year **{_wrst:+.2f}%**."
+            )
+        if db_summary.get("low_sample_warning"):
+            _snap.append(
+                f"⚠ **Limited data** — only {_tot} year(s) available; treat results as indicative."
+            )
+
+    # 2. Best entry window vs current selection
+    if db_bw_df is not None and not db_bw_df.empty:
+        _top = db_bw_df.iloc[0]
+        _cur_abbr = datetime.date(2000, sm, 1).strftime("%b")
+        _cur_rows = db_bw_df[db_bw_df["Window"].str.startswith(_cur_abbr)]
+        _best_line = (
+            f"🔍 **Best Entry Window** — Top pick is **{_top['Window']}** "
+            f"({_top['Target Met (yrs)']} of {_top['Out of (yrs)']} yrs hit target, "
+            f"avg {_top['Avg Return %']:+.2f}%)."
+        )
+        if not _cur_rows.empty:
+            _cr = _cur_rows.iloc[0]
+            _cur_rank = list(db_bw_df.index).index(_cr.name) + 1
+            _best_line += (
+                f"  Your entry month **{_cur_abbr}** ranks **#{_cur_rank} of {len(db_bw_df)}** "
+                f"({_cr['Target Met (yrs)']} of {_cr['Out of (yrs)']} yrs, avg {_cr['Avg Return %']:+.2f}%)."
+            )
+        _snap.append(_best_line)
+
+    # 3. Monthly rhythm
+    if db_pivot is not None:
+        _m_avg   = db_pivot.mean(axis=0)
+        _best_m  = _m_avg.idxmax()
+        _worst_m = _m_avg.idxmin()
+        _cur_m   = datetime.date(2000, sm, 1).strftime("%b")
+        _cur_mv  = _m_avg.get(_cur_m)
+        _mline   = (
+            f"📅 **Monthly Rhythm** — Strongest calendar month: **{_best_m}** "
+            f"({_m_avg[_best_m]:+.1f}%), weakest: **{_worst_m}** ({_m_avg[_worst_m]:+.1f}%)"
+        )
+        if _cur_mv is not None:
+            _mline += f".  Entry month **{_cur_m}** historically averages **{_cur_mv:+.1f}%**."
+        _snap.append(_mline)
+
+    # 4. Excess vs NIFTY
+    if db_ev_sum and db_ev_sum.get("nifty_available"):
+        _avg_exc   = db_ev_sum.get("avg_excess_return")
+        _stock_ret = db_ev_sum.get("avg_stock_return")
+        _nifty_ret = db_ev_sum.get("avg_nifty_return")
+        _beat_lbl  = db_ev_sum.get("beat_index_label", "")
+        _direction = "outperforms" if (_avg_exc or 0) > 0 else "underperforms"
+        _snap.append(
+            f"📈 **vs NIFTY** — Stock avg **{_stock_ret:+.2f}%** vs NIFTY **{_nifty_ret:+.2f}%** "
+            f"→ excess return **{_avg_exc:+.2f}%**.  "
+            f"Stock **{_direction}** the index ({_beat_lbl})."
+        )
+
+    # 5. Volume
+    if db_vol is not None:
+        _vs        = db_vol["summary"]
+        _conf_ret  = _vs.get("avg_return_vol_confirmed")
+        _unconf_ret = _vs.get("avg_return_unconfirmed")
+        _vline = (
+            f"📦 **Volume** — Entry backed by above-average volume in "
+            f"**{_vs['vol_confirmed_pct']}%** of years "
+            f"({_vs['vol_confirmed_entries']} / {_vs['total_years']})"
+        )
+        if _conf_ret is not None and _unconf_ret is not None:
+            _edge = _conf_ret - _unconf_ret
+            _vline += (
+                f".  High-vol entry avg **{_conf_ret:+.2f}%** vs low-vol **{_unconf_ret:+.2f}%** "
+                f"(volume edge: **{_edge:+.2f}%**)"
+            )
+        if _vs.get("divergence_count", 0) > 0:
+            _vline += f".  ⚠ Price-volume divergence in **{_vs['divergence_count']}** year(s) — weaker-conviction rallies."
+        else:
+            _vline += ".  No price-volume divergence detected."
+        _snap.append(_vline)
+
+    if _snap:
+        with st.expander("📋 Key Takeaways — Plain-English Summary", expanded=True):
+            for _pt in _snap:
+                st.markdown(f"- {_pt}")
 
     # ── Seasonal summary metrics ───────────────────────────────────────────────
     if db_summary and "error" not in db_summary:
