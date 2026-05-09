@@ -301,6 +301,72 @@ def _bar_chart(results_df: pd.DataFrame, min_return_pct: float, title: str) -> g
     return fig
 
 
+def _days_to_target_chart(
+    results_df: pd.DataFrame,
+    norm_map: dict,
+    min_return_pct: float,
+    title: str,
+) -> tuple:
+    """
+    For each year where the target was ultimately met, find the first calendar
+    day the indexed price crossed 100 + min_return_pct.
+    Returns (go.Figure, avg_days) or (None, None) if no years met the target.
+    """
+    threshold = 100 + min_return_pct
+    records = []
+    for _, row in results_df.iterrows():
+        year = row["year"]
+        if not row["target_met"] or year not in norm_map:
+            continue
+        series = norm_map[year].values
+        crossed = [i for i, v in enumerate(series) if v >= threshold]
+        if crossed:
+            records.append({"Year": str(year), "Days": crossed[0]})
+
+    if not records:
+        return None, None
+
+    df_d = pd.DataFrame(records)
+    avg_days = df_d["Days"].mean()
+    min_days = df_d["Days"].min()
+    max_days = df_d["Days"].max()
+
+    colors = [
+        "#27ae60" if d <= avg_days else "#e67e22"
+        for d in df_d["Days"]
+    ]
+
+    fig = go.Figure(go.Bar(
+        x=df_d["Year"],
+        y=df_d["Days"],
+        marker_color=colors,
+        text=df_d["Days"].astype(str),
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>First touched target on day %{y}<extra></extra>",
+        showlegend=False,
+    ))
+    fig.add_hline(
+        y=avg_days,
+        line_dash="dash",
+        line_color="#2980b9",
+        annotation_text=f"Avg {avg_days:.0f} days",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title="Year",
+        yaxis_title="Calendar Days from Entry",
+        height=410,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis=dict(tickangle=-45),
+        margin=dict(t=80),
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#efefef")
+    return fig, (avg_days, min_days, max_days)
+
+
 def _metric_row(summary: dict):
     """Render the key metric tiles."""
     tgt     = summary["min_return_pct"]
@@ -419,8 +485,8 @@ def tab_stock_analysis():
     _metric_row(summary)
     st.divider()
 
-    t_fan, t_bar, t_table = st.tabs(
-        ["📈 Price Trend Chart", "📊 Year-by-Year Returns", "🗃 Raw Data Table"]
+    t_fan, t_bar, t_days, t_table = st.tabs(
+        ["📈 Price Trend Chart", "📊 Year-by-Year Returns", "⏱ Days to Target", "🗃 Raw Data Table"]
     )
 
     with t_fan:
@@ -443,6 +509,26 @@ def tab_stock_analysis():
         filtered_bar = _year_range_filter(results_df, key="sa_bar_yr")
         fig = _bar_chart(filtered_bar, min_return, f"{sym_name} — Annual Returns")
         st.plotly_chart(fig, use_container_width=True)
+
+    with t_days:
+        fig_d, d_stats = _days_to_target_chart(
+            results_df, norm_map, min_return,
+            f"{sym_name} — Days to First Touch {min_return:.0f}%  ·  {win_label}",
+        )
+        if fig_d is not None:
+            avg_d, min_d, max_d = d_stats
+            dc1, dc2, dc3 = st.columns(3)
+            dc1.metric("Avg Days to Target", f"{avg_d:.0f} days",
+                       help="Average calendar days from entry to first crossing the target, in years where target was met.")
+            dc2.metric("Fastest Hit", f"{min_d:.0f} days")
+            dc3.metric("Slowest Hit", f"{max_d:.0f} days")
+            st.caption(
+                "Green bars = at-or-below average speed · Orange bars = slower than average.  "
+                "Only years where the target was **ultimately met** at window close are shown."
+            )
+            st.plotly_chart(fig_d, use_container_width=True)
+        else:
+            st.info(f"Target of {min_return:.0f}% was never met in this window — no days-to-target data.")
 
     with t_table:
         display = results_df.copy()
@@ -2207,21 +2293,25 @@ def tab_dashboard():
 
     st.divider()
 
-    # ── Price Trend Fan Chart  +  Year-by-Year Returns ────────────────────────
-    st.markdown("### 📈 Price Trend  &  Year-by-Year Returns")
+    # ── Days to Target  +  Year-by-Year Returns ─────────────────────────────
+    st.markdown("### ⏱ Days to Hit Target  &  📊 Year-by-Year Returns")
 
     if db_res_df is not None and db_summary and "error" not in db_summary:
         summary_copy = dict(db_summary)
         norm_map = summary_copy.pop("norm_series_map")
-        col_fan, col_bar = st.columns(2)
-        with col_fan:
-            fig_fan = _fan_chart(
-                db_res_df, norm_map,
-                f"{sym_name} — Price Path  ·  {win_label}",
-                min_return,
+        col_days, col_bar = st.columns(2)
+        with col_days:
+            fig_d, d_stats = _days_to_target_chart(
+                db_res_df, norm_map, min_return,
+                f"{sym_name} — Days to First Touch {min_return:.0f}%  ·  {win_label}",
             )
-            fig_fan.update_layout(height=380, margin=dict(t=60))
-            st.plotly_chart(fig_fan, use_container_width=True)
+            if fig_d is not None:
+                avg_d, min_d, max_d = d_stats
+                fig_d.update_layout(height=380, margin=dict(t=60))
+                st.plotly_chart(fig_d, use_container_width=True)
+                st.caption(f"Avg **{avg_d:.0f} days** to hit target · fastest {min_d:.0f}d · slowest {max_d:.0f}d")
+            else:
+                st.info(f"Target of {min_return:.0f}% was never met in this window.")
         with col_bar:
             fig_bar = _bar_chart(
                 db_res_df, min_return,
