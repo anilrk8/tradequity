@@ -2105,6 +2105,218 @@ def tab_data_management():
             st.caption("No custom tickers added yet.")
 
 
+# ─── Compare Tab ──────────────────────────────────────────────────────────────
+
+def tab_compare():
+    st.subheader("Stock Comparison")
+    st.caption(
+        "Compare two stocks side-by-side over the same entry window. "
+        "See which has historically performed better, how correlated their returns are, "
+        "and in which years they diverged."
+    )
+
+    col_a, col_b, col_w = st.columns([1, 1, 2])
+    with col_a:
+        st.markdown("**Stock A**")
+        _, sym_a = _stock_selector("cmp_a")
+    with col_b:
+        st.markdown("**Stock B**")
+        _, sym_b = _stock_selector("cmp_b")
+    with col_w:
+        sm, sd, holding_days, min_return = _entry_inputs("cmp")
+
+    if st.button("▶ Compare", type="primary", key="cmp_go"):
+        if sym_a == sym_b:
+            st.warning("Please select two different stocks to compare.")
+            return
+        with st.spinner("Running comparison analysis…"):
+            res_a, sum_a = seasonal_analysis(sym_a, sm, sd, holding_days, min_return)
+            res_b, sum_b = seasonal_analysis(sym_b, sm, sd, holding_days, min_return)
+        if res_a is None or res_b is None:
+            st.error("Unable to retrieve data for one or both stocks. Please check the database.")
+            return
+
+        st.session_state.update({
+            "cmp_res_a": res_a, "cmp_sum_a": sum_a,
+            "cmp_res_b": res_b, "cmp_sum_b": sum_b,
+            "_cmp_sym_a": sym_a, "_cmp_sym_b": sym_b,
+            "_cmp_sm": sm, "_cmp_sd": sd,
+            "_cmp_hold": holding_days, "_cmp_minret": min_return,
+        })
+
+    if "cmp_res_a" not in st.session_state:
+        return
+
+    res_a  = st.session_state["cmp_res_a"]
+    sum_a  = dict(st.session_state["cmp_sum_a"])
+    res_b  = st.session_state["cmp_res_b"]
+    sum_b  = dict(st.session_state["cmp_sum_b"])
+    sym_a  = st.session_state["_cmp_sym_a"]
+    sym_b  = st.session_state["_cmp_sym_b"]
+    sm     = st.session_state["_cmp_sm"]
+    sd     = st.session_state["_cmp_sd"]
+    holding_days = st.session_state["_cmp_hold"]
+    min_return   = st.session_state["_cmp_minret"]
+
+    name_map  = get_symbol_to_name(UNIVERSE)
+    name_a    = name_map.get(sym_a, sym_a)
+    name_b    = name_map.get(sym_b, sym_b)
+    win_label = _window_label(sm, sd, holding_days)
+
+    # Pop norm_series_map so it doesn't break metric helpers
+    norm_a = sum_a.pop("norm_series_map", {})
+    norm_b = sum_b.pop("norm_series_map", {})
+
+    st.divider()
+    st.markdown(f"### {name_a}  vs  {name_b}  ·  {win_label}")
+
+    # ── Scorecard ─────────────────────────────────────────────────────────────
+    def _scorecard(name, summary, norm_map):
+        st.markdown(f"**{name}**")
+        tgt     = summary["min_return_pct"]
+        avg_ret = summary["avg_return_pct"]
+        avg_met = summary["avg_return_when_met"]
+        never   = summary["target_never_met"]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Target ≥{tgt:.0f}% Met", summary["target_met_label"])
+        c2.metric("Avg Return", f"{avg_ret:+.2f}%")
+        c3.metric(
+            f"Avg when ≥{tgt:.0f}%",
+            "Never" if never else (f"{avg_met:+.2f}%" if avg_met else "—"),
+        )
+        c4, c5 = st.columns(2)
+        c4.metric("Best Year", str(summary["best_year"]),
+                  delta=f"{summary['best_return_pct']:+.1f}%")
+        c5.metric("Worst Year", str(summary["worst_year"]),
+                  delta=f"{summary['worst_return_pct']:+.1f}%")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        _scorecard(name_a, sum_a, norm_a)
+    with col2:
+        _scorecard(name_b, sum_b, norm_b)
+
+    st.divider()
+
+    # ── Year-by-year grouped bar chart ────────────────────────────────────────
+    st.markdown("#### Year-by-Year Returns")
+    merged = pd.merge(
+        res_a[["Year", "return_pct"]].rename(columns={"return_pct": name_a}),
+        res_b[["Year", "return_pct"]].rename(columns={"return_pct": name_b}),
+        on="Year", how="outer"
+    ).sort_values("Year")
+
+    fig_grp = go.Figure()
+    fig_grp.add_bar(
+        x=merged["Year"], y=merged[name_a],
+        name=name_a,
+        marker_color="#2980b9",
+        hovertemplate="<b>%{x}</b><br>" + name_a + ": %{y:+.2f}%<extra></extra>",
+    )
+    fig_grp.add_bar(
+        x=merged["Year"], y=merged[name_b],
+        name=name_b,
+        marker_color="#e67e22",
+        hovertemplate="<b>%{x}</b><br>" + name_b + ": %{y:+.2f}%<extra></extra>",
+    )
+    fig_grp.add_hline(y=min_return, line_dash="dot", line_color="#27ae60",
+                      annotation_text=f"Target {min_return:.0f}%", annotation_position="top left")
+    fig_grp.update_layout(
+        barmode="group", height=400,
+        plot_bgcolor="white", paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(tickangle=-45), margin=dict(t=60),
+        yaxis_title="Return (%)",
+    )
+    fig_grp.update_xaxes(showgrid=False)
+    fig_grp.update_yaxes(showgrid=True, gridcolor="#efefef")
+    st.plotly_chart(fig_grp, use_container_width=True)
+
+    # ── Correlation & divergence ───────────────────────────────────────────────
+    overlap = merged.dropna(subset=[name_a, name_b])
+    if len(overlap) >= 3:
+        corr = overlap[name_a].corr(overlap[name_b])
+        a_wins = overlap[(overlap[name_a] >= min_return) & (overlap[name_b] < min_return)]["Year"].tolist()
+        b_wins = overlap[(overlap[name_b] >= min_return) & (overlap[name_a] < min_return)]["Year"].tolist()
+
+        st.divider()
+        st.markdown("#### Correlation & Divergence")
+        cc1, cc2, cc3 = st.columns(3)
+        cc1.metric("Return Correlation", f"{corr:.2f}",
+                   help="Pearson correlation of annual returns across overlapping years. "
+                        "1 = move in perfect lockstep, 0 = no relationship, -1 = opposites.")
+        cc2.metric(f"Years only {name_a} hit target", str(len(a_wins)),
+                   help=", ".join(str(y) for y in a_wins) if a_wins else "None")
+        cc3.metric(f"Years only {name_b} hit target", str(len(b_wins)),
+                   help=", ".join(str(y) for y in b_wins) if b_wins else "None")
+
+        if a_wins:
+            st.caption(f"**{name_a}** hit the target but **{name_b}** didn't: {', '.join(str(y) for y in a_wins)}")
+        if b_wins:
+            st.caption(f"**{name_b}** hit the target but **{name_a}** didn't: {', '.join(str(y) for y in b_wins)}")
+
+        # Scatter plot: A vs B return per year
+        st.markdown("#### Return Scatter (each dot = one year)")
+        fig_sc = go.Figure()
+        fig_sc.add_trace(go.Scatter(
+            x=overlap[name_a], y=overlap[name_b],
+            mode="markers+text",
+            text=overlap["Year"].astype(str),
+            textposition="top center",
+            marker=dict(size=9, color="#8e44ad", opacity=0.8),
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                + name_a + ": %{x:+.1f}%<br>"
+                + name_b + ": %{y:+.1f}%<extra></extra>"
+            ),
+        ))
+        # Reference lines at target
+        fig_sc.add_vline(x=min_return, line_dash="dot", line_color="#27ae60",
+                         annotation_text=f"A target {min_return:.0f}%")
+        fig_sc.add_hline(y=min_return, line_dash="dot", line_color="#e67e22",
+                         annotation_text=f"B target {min_return:.0f}%")
+        # OLS trendline
+        if len(overlap) >= 2:
+            m, b = np.polyfit(overlap[name_a], overlap[name_b], 1)
+            x_line = np.linspace(overlap[name_a].min(), overlap[name_a].max(), 50)
+            fig_sc.add_trace(go.Scatter(
+                x=x_line, y=m * x_line + b,
+                mode="lines",
+                line=dict(color="#95a5a6", dash="dash", width=1),
+                name="Trend",
+                showlegend=False,
+            ))
+        fig_sc.update_layout(
+            xaxis_title=f"{name_a} Return (%)",
+            yaxis_title=f"{name_b} Return (%)",
+            height=420, plot_bgcolor="white", paper_bgcolor="white",
+            margin=dict(t=40),
+        )
+        fig_sc.update_xaxes(showgrid=True, gridcolor="#efefef")
+        fig_sc.update_yaxes(showgrid=True, gridcolor="#efefef")
+        st.plotly_chart(fig_sc, use_container_width=True)
+    else:
+        st.info("Not enough overlapping years to compute correlation.")
+
+    # ── Raw data tables ────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### Raw Data")
+    t_ra, t_rb = st.columns(2)
+    with t_ra:
+        st.caption(name_a)
+        d = res_a.copy()
+        d["return_pct"] = d["return_pct"].apply(lambda x: f"{x:+.2f}%")
+        d["target_met"] = d["target_met"].map({True: "✓", False: "✗"})
+        st.dataframe(d, use_container_width=True, height=280)
+    with t_rb:
+        st.caption(name_b)
+        d = res_b.copy()
+        d["return_pct"] = d["return_pct"].apply(lambda x: f"{x:+.2f}%")
+        d["target_met"] = d["target_met"].map({True: "✓", False: "✗"})
+        st.dataframe(d, use_container_width=True, height=280)
+
+
 # ─── Dashboard Tab ────────────────────────────────────────────────────────────
 
 def tab_dashboard():
