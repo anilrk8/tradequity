@@ -32,11 +32,14 @@ export default function DeepInsights() {
   const [stocks, setStocks]       = useState([]);
   const [symbol, setSymbol]       = useState("");
   const [holdingDays, setHolding] = useState(90);
+  const [minReturn, setMinReturn] = useState(12);
 
   const today = new Date();
-  const [date, setDate]   = useState(`${today.getFullYear()}-04-01`);
-  const [month, setMonth] = useState(4);
-  const [day, setDay]     = useState(1);
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  const [date, setDate]   = useState(`${today.getFullYear()}-${mm}-${dd}`);
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [day, setDay]     = useState(today.getDate());
 
   const [heatmapData,  setHeatmapData]  = useState(null);
   const [excessData,   setExcessData]   = useState(null);
@@ -62,7 +65,7 @@ export default function DeepInsights() {
         const d = await getMonthlyHeatmap(symbol);
         setHeatmapData(d);
       } else if (activeTab === "excess") {
-        const d = await getExcessReturn(symbol, month, day, holdingDays);
+        const d = await getExcessReturn(symbol, month, day, holdingDays, minReturn);
         setExcessData(d);
       } else if (activeTab === "rotation") {
         const d = await getSectorRotation();
@@ -127,6 +130,12 @@ export default function DeepInsights() {
               onChange={(e) => setHolding(parseInt(e.target.value) || 90)} />
           </label>
         )}
+        {activeTab === "excess" && (
+          <label>Min Return %
+            <input type="number" step={0.5} value={minReturn}
+              onChange={(e) => setMinReturn(parseFloat(e.target.value) || 0)} />
+          </label>
+        )}
         <button className="btn-primary" onClick={run} disabled={loading}>
           {loading ? "Loading…" : "Run →"}
         </button>
@@ -141,23 +150,7 @@ export default function DeepInsights() {
 
       {/* ── Excess Return vs NIFTY ── */}
       {activeTab === "excess" && excessData?.rows?.length > 0 && (
-        <div>
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={excessData.rows} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-              <XAxis dataKey="Year" />
-              <YAxis />
-              <Tooltip formatter={(v) => `${v > 0 ? "+" : ""}${v?.toFixed(2)}%`} />
-              <Legend />
-              <Bar dataKey="Excess %" name="Excess Return vs NIFTY" radius={[3,3,0,0]}>
-                {excessData.rows.map((entry, i) => (
-                  <Cell key={i} fill={(entry["Excess %"] ?? 0) >= 0 ? "#27ae60" : "#e74c3c"} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          <ResultTable rows={excessData.rows} />
-        </div>
+        <ExcessView data={excessData} minReturn={minReturn} />
       )}
 
       {/* ── Sector Rotation ── */}
@@ -184,6 +177,110 @@ export default function DeepInsights() {
 }
 
 /* ────────────── SUB-VIEWS ────────────── */
+
+/* ── Excess Return vs NIFTY view ── */
+function ExcessView({ data, minReturn }) {
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+  const regimes = data?.vix_regime_breakdown || [];
+
+  const barData = rows.map((r) => ({
+    year:   String(r.year),
+    stock:  r.stock_return,
+    nifty:  r.nifty_return,
+    excess: r.excess_return,
+    fill:   (r.excess_return ?? 0) >= 0 ? "#27ae60" : "#e74c3c",
+  }));
+
+  return (
+    <div>
+      {/* Excess return bar */}
+      {summary.avg_excess_return != null && (
+        <div className="metrics-row" style={{ marginBottom: 12 }}>
+          <div className="metric-card">
+            <div className="metric-value" style={{ color: summary.avg_stock_return >= 0 ? "#27ae60" : "#e74c3c" }}>
+              {summary.avg_stock_return > 0 ? "+" : ""}{summary.avg_stock_return?.toFixed(2)}%
+            </div>
+            <div className="metric-label">Avg Stock Return</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-value">{summary.avg_nifty_return?.toFixed(2)}%</div>
+            <div className="metric-label">Avg NIFTY Return</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-value" style={{ color: summary.avg_excess_return >= 0 ? "#27ae60" : "#e74c3c" }}>
+              {summary.avg_excess_return > 0 ? "+" : ""}{summary.avg_excess_return?.toFixed(2)}%
+            </div>
+            <div className="metric-label">Avg Excess Return</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-value">{summary.beat_index_label}</div>
+            <div className="metric-label">Beat NIFTY</div>
+          </div>
+        </div>
+      )}
+
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart data={barData} margin={{ top: 20, right: 20, bottom: 30, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+          <XAxis dataKey="year" angle={-45} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
+          <YAxis tickFormatter={(v) => `${v}%`} />
+          <Tooltip formatter={(v, name) => [`${v > 0 ? "+" : ""}${v?.toFixed(2)}%`, name]} />
+          <Legend />
+          <ReferenceLine y={0} stroke="#888" />
+          <Bar dataKey="excess" name="Excess vs NIFTY %" radius={[3,3,0,0]}>
+            {barData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+          </Bar>
+          <Bar dataKey="stock" name="Stock Return %" fill="rgba(41,128,185,0.35)" radius={[3,3,0,0]} />
+          <Bar dataKey="nifty" name="NIFTY Return %" fill="rgba(127,140,141,0.35)" radius={[3,3,0,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+
+      {/* VIX Regime table */}
+      {regimes.length > 0 && (
+        <>
+          <h4 className="section-header" style={{ marginTop: 20 }}>
+            Target Hit Rate by India VIX Regime at Entry
+          </h4>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>VIX Regime</th>
+                  <th>Years</th>
+                  <th>Target ≥{minReturn}% Met</th>
+                  <th>Hit Rate %</th>
+                  <th>Avg Return %</th>
+                  <th>Min %</th>
+                  <th>Max %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {regimes.map((r) => (
+                  <tr key={r.regime}>
+                    <td><strong>{r.regime}</strong></td>
+                    <td>{r.years}</td>
+                    <td style={{ color: r.target_met > 0 ? "#27ae60" : "#e74c3c", fontWeight: 600 }}>
+                      {r.target_met} / {r.years}
+                    </td>
+                    <td style={{ color: r.hit_rate_pct >= 50 ? "#27ae60" : "#e74c3c", fontWeight: 600 }}>
+                      {r.hit_rate_pct}%
+                    </td>
+                    <td style={{ color: r.avg_return_pct >= 0 ? "#27ae60" : "#e74c3c" }}>
+                      {r.avg_return_pct > 0 ? "+" : ""}{r.avg_return_pct}%
+                    </td>
+                    <td style={{ color: r.min_pct >= 0 ? "#27ae60" : "#e74c3c" }}>{r.min_pct}%</td>
+                    <td style={{ color: "#27ae60" }}>+{r.max_pct}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function HeatmapView({ data }) {
   if (!data?.rows?.length) return <p>No data.</p>;

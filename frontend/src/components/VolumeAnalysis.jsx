@@ -19,9 +19,11 @@ export default function VolumeAnalysis() {
   const [activeTab, setActiveTab] = useState("rhythm");
 
   const today = new Date();
-  const [date, setDate]   = useState(`${today.getFullYear()}-04-01`);
-  const [month, setMonth] = useState(4);
-  const [day, setDay]     = useState(1);
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  const [date, setDate]   = useState(`${today.getFullYear()}-${mm}-${dd}`);
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [day, setDay]     = useState(today.getDate());
 
   useEffect(() => {
     getStocks().then((d) => {

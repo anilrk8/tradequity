@@ -57,8 +57,11 @@ export const getUniverseScreener = (start_month, start_day, holding_days, min_re
   _get("/api/analysis/best-windows/universe", { start_month, start_day, holding_days, min_return, universe });
 
 export const getMonthlyHeatmap   = (symbol) => _get("/api/analysis/heatmap",        { symbol });
-export const getExcessReturn     = (symbol, start_month, start_day, holding_days)   =>
-  _get("/api/analysis/excess-return", { symbol, start_month, start_day, holding_days });
+export const getExcessReturn     = (symbol, start_month, start_day, holding_days, min_return = 0) =>
+  _get("/api/analysis/excess-return", { symbol, start_month, start_day, holding_days, min_return });
+
+export const getDaysToTarget     = (symbol, start_month, start_day, holding_days, min_return = 12) =>
+  _get("/api/analysis/days-to-target", { symbol, start_month, start_day, holding_days, min_return });
 
 export const getSectorRotation   = (universe = "NIFTY500") => _get("/api/analysis/sector-rotation", { universe });
 

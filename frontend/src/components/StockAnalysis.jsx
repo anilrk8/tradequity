@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ReferenceLine, LineChart, Line, Legend, AreaChart, Area,
+  ReferenceLine, LineChart, Line, Legend, AreaChart, Area, Cell,
 } from "recharts";
-import { getStocks, getSeasonalAnalysis, streamAiCommentary } from "../api";
+import { getStocks, getSeasonalAnalysis, getDaysToTarget, streamAiCommentary } from "../api";
 import "../styles/seasonal.css";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -54,12 +54,15 @@ const CustomBarLabel = ({ x, y, width, value }) => {
 
 export default function StockAnalysis() {
   const today = new Date();
-  const defaultDate = `${today.getFullYear()}-04-01`;
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  const defaultDate = `${today.getFullYear()}-${mm}-${dd}`;
 
   const [stocks, setStocks]         = useState([]);
   const [symbol, setSymbol]         = useState("");
-  const [inputs, setInputs]         = useState({ date: defaultDate, month: 4, day: 1, holdingDays: 90, minReturn: 0 });
+  const [inputs, setInputs]         = useState({ date: defaultDate, month: today.getMonth() + 1, day: today.getDate(), holdingDays: 90, minReturn: 0 });
   const [result, setResult]         = useState(null);
+  const [daysData, setDaysData]     = useState(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState(null);
   const [activeTab, setActiveTab]   = useState("fan");
@@ -74,10 +77,13 @@ export default function StockAnalysis() {
   }, []);
 
   const handleAnalyse = async () => {
-    setLoading(true); setError(null); setResult(null); setCommentary("");
+    setLoading(true); setError(null); setResult(null); setDaysData(null); setCommentary("");
     try {
       const data = await getSeasonalAnalysis(symbol, inputs.month, inputs.day, inputs.holdingDays, inputs.minReturn);
       setResult(data);
+      // Also fetch days-to-target in parallel (non-blocking)
+      getDaysToTarget(symbol, inputs.month, inputs.day, inputs.holdingDays, inputs.minReturn)
+        .then(setDaysData).catch(() => {});
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   };
@@ -176,7 +182,7 @@ export default function StockAnalysis() {
           </div>
 
           <div className="tab-bar">
-            {[["fan","📈 Price Trend"],["bar","📊 Year-by-Year"],["table","🗃 Raw Data"]].map(([id, label]) => (
+            {[["fan","📈 Price Trend"],["bar","📊 Year-by-Year"],["days","⏱ Days to Target"],["table","🗃 Raw Data"]].map(([id, label]) => (
               <button key={id} className={`tab-btn${activeTab === id ? " active" : ""}`} onClick={() => setActiveTab(id)}>
                 {label}
               </button>
@@ -222,6 +228,56 @@ export default function StockAnalysis() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+          )}
+
+          {activeTab === "days" && (
+            <div className="chart-container">
+              {daysData && daysData.years_met > 0 ? (
+                <>
+                  <div className="metrics-row" style={{ marginBottom: 12 }}>
+                    <div className="metric-card">
+                      <div className="metric-value">{daysData.avg_days?.toFixed(0)} days</div>
+                      <div className="metric-label">Avg Days to Hit Target</div>
+                    </div>
+                    <div className="metric-card">
+                      <div className="metric-value" style={{ color: "#27ae60" }}>{daysData.min_days} days</div>
+                      <div className="metric-label">Fastest Hit</div>
+                    </div>
+                    <div className="metric-card">
+                      <div className="metric-value" style={{ color: "#e67e22" }}>{daysData.max_days} days</div>
+                      <div className="metric-label">Slowest Hit</div>
+                    </div>
+                    <div className="metric-card">
+                      <div className="metric-value">{daysData.years_met} / {daysData.total_years}</div>
+                      <div className="metric-label">Years Target Met</div>
+                    </div>
+                  </div>
+                  <p className="chart-caption">
+                    Green = at or below average speed · Orange = slower than average.
+                    Only years where target was ultimately met are shown.
+                  </p>
+                  <ResponsiveContainer width="100%" height={340}>
+                    <BarChart data={daysData.rows} margin={{ top: 20, right: 20, bottom: 30, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                      <XAxis dataKey="year" angle={-45} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
+                      <YAxis label={{ value: "Days from Entry", angle: -90, position: "insideLeft", offset: 10 }} />
+                      <Tooltip formatter={(v) => [`${v} days`, "Days to Hit Target"]} />
+                      <ReferenceLine y={daysData.avg_days} stroke="#2980b9" strokeDasharray="5 5"
+                        label={{ value: `Avg ${daysData.avg_days?.toFixed(0)}d`, position: "right", fontSize: 11 }} />
+                      <Bar dataKey="days_to_target" radius={[3,3,0,0]}>
+                        {daysData.rows.map((r, i) => (
+                          <rect key={i} fill={r.days_to_target <= daysData.avg_days ? "#27ae60" : "#e67e22"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </>
+              ) : (
+                <p className="chart-caption">
+                  {daysData ? `Target of ${inputs.minReturn}% was never met — no days-to-target data.` : "Run analysis to see days-to-target."}
+                </p>
+              )}
             </div>
           )}
 

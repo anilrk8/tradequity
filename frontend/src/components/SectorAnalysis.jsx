@@ -10,13 +10,15 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 
 export default function SectorAnalysis() {
   const today = new Date();
-  const defaultDate = `${today.getFullYear()}-04-01`;
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  const defaultDate = `${today.getFullYear()}-${mm}-${dd}`;
 
   const [sectors, setSectors]   = useState([]);
   const [sector, setSector]     = useState("");
   const [date, setDate]         = useState(defaultDate);
-  const [month, setMonth]       = useState(4);
-  const [day, setDay]           = useState(1);
+  const [month, setMonth]       = useState(today.getMonth() + 1);
+  const [day, setDay]           = useState(today.getDate());
   const [holdingDays, setHolding] = useState(90);
   const [minReturn, setMinReturn] = useState(0);
   const [result, setResult]     = useState(null);

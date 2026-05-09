@@ -272,11 +272,91 @@ def get_excess_return(
     start_month: int = Query(ge=1, le=12),
     start_day:   int = Query(ge=1, le=31),
     holding_days: int = Query(ge=5, le=365),
+    min_return:  float = Query(default=0.0),
 ):
-    df = excess_return_vs_nifty(symbol, start_month, start_day, holding_days)
-    if df is None:
+    import pandas as pd
+    results_df, summary = excess_return_vs_nifty(symbol, start_month, start_day, holding_days, min_return)
+    if results_df is None:
         raise HTTPException(status_code=404, detail="No data. Download indices first.")
-    return {"rows": _df_to_records(df)}
+
+    # VIX regime breakdown with target hit rate
+    regime_breakdown = []
+    vix_data = results_df.dropna(subset=["vix_at_entry"]).copy()
+    if len(vix_data) >= 3 and summary and summary.get("vix_available"):
+        vix_data["vix_regime"] = pd.cut(
+            vix_data["vix_at_entry"],
+            bins=[0, 14, 20, 100],
+            labels=["Calm (<14)", "Normal (14\u201320)", "Elevated (>20)"],
+        )
+        for regime, grp in vix_data.groupby("vix_regime", observed=True):
+            regime_breakdown.append({
+                "regime":         str(regime),
+                "years":          len(grp),
+                "target_met":     int(grp["target_met"].sum()),
+                "hit_rate_pct":   round(float(grp["target_met"].mean() * 100), 1),
+                "avg_return_pct": round(float(grp["stock_return"].mean()), 2),
+                "min_pct":        round(float(grp["stock_return"].min()), 2),
+                "max_pct":        round(float(grp["stock_return"].max()), 2),
+            })
+
+    import numpy as np
+    def _clean_val(v):
+        if isinstance(v, (np.integer,)):  return int(v)
+        if isinstance(v, (np.floating,)): return None if np.isnan(v) else float(v)
+        if isinstance(v, (np.bool_,)):    return bool(v)
+        return v
+    clean_summary = {k: _clean_val(v) for k, v in (summary or {}).items()}
+
+    return {
+        "rows":                _df_to_records(results_df),
+        "summary":             clean_summary,
+        "vix_regime_breakdown": regime_breakdown,
+        "min_return":          min_return,
+    }
+
+
+@app.get("/api/analysis/days-to-target")
+def get_days_to_target(
+    symbol: str,
+    start_month: int = Query(ge=1, le=12),
+    start_day:   int = Query(ge=1, le=31),
+    holding_days: int = Query(ge=5, le=365),
+    min_return:  float = Query(default=12.0),
+):
+    """
+    For each year where the target was met, return the first calendar day
+    (from entry) that the indexed price crossed 100 + min_return.
+    """
+    results_df, summary = seasonal_analysis(symbol, start_month, start_day, holding_days, min_return)
+    if results_df is None:
+        raise HTTPException(status_code=404, detail="No data found.")
+
+    norm_map  = summary.get("norm_series_map", {})
+    threshold = 100.0 + min_return
+    records   = []
+    for _, row in results_df.iterrows():
+        year = row["year"]
+        if not row["target_met"] or year not in norm_map:
+            continue
+        series  = norm_map[year].values
+        crossed = [i for i, v in enumerate(series) if v >= threshold]
+        if crossed:
+            records.append({"year": int(year), "days_to_target": crossed[0],
+                            "return_pct": round(float(row["return_pct"]), 2)})
+
+    if not records:
+        return {"rows": [], "avg_days": None, "min_days": None, "max_days": None,
+                "years_met": 0, "total_years": int(len(results_df))}
+
+    days = [r["days_to_target"] for r in records]
+    return {
+        "rows":        records,
+        "avg_days":    round(sum(days) / len(days), 1),
+        "min_days":    int(min(days)),
+        "max_days":    int(max(days)),
+        "years_met":   len(records),
+        "total_years": int(len(results_df)),
+    }
 
 
 @app.get("/api/analysis/sector-rotation")
