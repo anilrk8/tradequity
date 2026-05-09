@@ -2202,20 +2202,20 @@ def tab_compare():
     # ── Year-by-year grouped bar chart ────────────────────────────────────────
     st.markdown("#### Year-by-Year Returns")
     merged = pd.merge(
-        res_a[["Year", "return_pct"]].rename(columns={"return_pct": name_a}),
-        res_b[["Year", "return_pct"]].rename(columns={"return_pct": name_b}),
-        on="Year", how="outer"
-    ).sort_values("Year")
+        res_a[["year", "return_pct"]].rename(columns={"return_pct": name_a}),
+        res_b[["year", "return_pct"]].rename(columns={"return_pct": name_b}),
+        on="year", how="outer"
+    ).sort_values("year")
 
     fig_grp = go.Figure()
     fig_grp.add_bar(
-        x=merged["Year"], y=merged[name_a],
+        x=merged["year"], y=merged[name_a],
         name=name_a,
         marker_color="#2980b9",
         hovertemplate="<b>%{x}</b><br>" + name_a + ": %{y:+.2f}%<extra></extra>",
     )
     fig_grp.add_bar(
-        x=merged["Year"], y=merged[name_b],
+        x=merged["year"], y=merged[name_b],
         name=name_b,
         marker_color="#e67e22",
         hovertemplate="<b>%{x}</b><br>" + name_b + ": %{y:+.2f}%<extra></extra>",
@@ -2237,8 +2237,8 @@ def tab_compare():
     overlap = merged.dropna(subset=[name_a, name_b])
     if len(overlap) >= 3:
         corr = overlap[name_a].corr(overlap[name_b])
-        a_wins = overlap[(overlap[name_a] >= min_return) & (overlap[name_b] < min_return)]["Year"].tolist()
-        b_wins = overlap[(overlap[name_b] >= min_return) & (overlap[name_a] < min_return)]["Year"].tolist()
+        a_wins = overlap[(overlap[name_a] >= min_return) & (overlap[name_b] < min_return)]["year"].tolist()
+        b_wins = overlap[(overlap[name_b] >= min_return) & (overlap[name_a] < min_return)]["year"].tolist()
 
         st.divider()
         st.markdown("#### Correlation & Divergence")
@@ -2262,7 +2262,7 @@ def tab_compare():
         fig_sc.add_trace(go.Scatter(
             x=overlap[name_a], y=overlap[name_b],
             mode="markers+text",
-            text=overlap["Year"].astype(str),
+            text=overlap["year"].astype(str),
             textposition="top center",
             marker=dict(size=9, color="#8e44ad", opacity=0.8),
             hovertemplate=(
