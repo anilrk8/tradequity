@@ -235,6 +235,51 @@ def get_custom_tickers() -> list[dict]:
         conn.close()
 
 
+def autofix_custom_sectors(
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
+) -> dict[str, str]:
+    """
+    For every CUSTOM ticker still assigned sector='Custom', query yfinance for
+    the real sector and update the DB row.
+
+    progress_callback(done, total, symbol, new_sector)
+    Returns {symbol: new_sector} for all tickers that were updated.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT symbol FROM stocks WHERE universe = 'CUSTOM' AND (sector = 'Custom' OR sector IS NULL OR sector = '')"
+        )
+        to_fix = [r[0] for r in cur.fetchall()]
+
+        total = len(to_fix)
+        updated: dict[str, str] = {}
+
+        for i, symbol in enumerate(to_fix):
+            try:
+                info = yf.Ticker(symbol).info
+                raw = info.get("sector") or info.get("industry") or ""
+                new_sector = raw.strip() if raw.strip() else "Custom"
+            except Exception:
+                new_sector = "Custom"
+
+            if new_sector != "Custom":
+                conn.execute(
+                    "UPDATE stocks SET sector = ? WHERE symbol = ? AND universe = 'CUSTOM'",
+                    (new_sector, symbol),
+                )
+                conn.commit()
+                updated[symbol] = new_sector
+
+            if progress_callback:
+                progress_callback(i + 1, total, symbol, new_sector)
+
+        return updated
+    finally:
+        conn.close()
+
+
 def update_custom_tickers(
     progress_callback: Callable[[int, int, str, int, str], None] | None = None,
 ) -> None:

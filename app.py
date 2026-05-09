@@ -25,7 +25,7 @@ from src.analyzer import (
 from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
     fetch_indices, get_index_status, has_index_data, INDEX_TICKERS,
-    fetch_custom_ticker, get_custom_tickers, update_custom_tickers,
+    fetch_custom_ticker, get_custom_tickers, update_custom_tickers, autofix_custom_sectors,
 )
 from src.universe import get_sectors, get_stocks, get_symbol_to_name
 from src.db import init_db
@@ -2080,6 +2080,33 @@ def tab_data_management():
                 use_container_width=True,
                 key="ct_update",
             )
+            ct_fix_btn = st.button(
+                "🏷  Auto-fix Sectors",
+                use_container_width=True,
+                key="ct_fix_sectors",
+                help="Query Yahoo Finance for the real sector of every custom ticker still tagged 'Custom'.",
+            )
+            if ct_fix_btn:
+                to_fix = [c for c in custom_list if c["sector"] == "Custom"]
+                if not to_fix:
+                    st.info("All custom tickers already have a proper sector assigned.")
+                else:
+                    fix_prog = st.progress(0.0, text="Looking up sectors…")
+                    fix_log_lines: list[str] = []
+                    fix_log = st.empty()
+
+                    def on_fix_progress(done: int, total: int, symbol: str, new_sector: str):
+                        fix_prog.progress(done / total, text=f"[{done}/{total}]  {symbol}")
+                        label = new_sector if new_sector != "Custom" else "(not found — kept Custom)"
+                        fix_log_lines.append(f"  {symbol}  →  {label}")
+                        fix_log.text("\n".join(fix_log_lines))
+
+                    updated = autofix_custom_sectors(progress_callback=on_fix_progress)
+                    fix_prog.progress(1.0, text="Done ✓")
+                    if updated:
+                        st.success(f"Updated {len(updated)} ticker(s): {', '.join(updated.keys())}. Refresh the page to see changes.")
+                    else:
+                        st.warning("No sectors could be auto-detected — Yahoo Finance may not have sector data for these tickers.")
             if ct_update_btn:
                 ct_prog = st.progress(0.0, text="Updating custom tickers…")
                 ct_log_lines: list[str] = []
