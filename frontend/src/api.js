@@ -63,6 +63,12 @@ export const getExcessReturn     = (symbol, start_month, start_day, holding_days
 export const getDaysToTarget     = (symbol, start_month, start_day, holding_days, min_return = 12) =>
   _get("/api/analysis/days-to-target", { symbol, start_month, start_day, holding_days, min_return });
 
+export const getDashboardSummary = (symbol, start_month, start_day, holding_days, min_return = 12) =>
+  _get("/api/analysis/dashboard-summary", { symbol, start_month, start_day, holding_days, min_return });
+
+export const getStockComparison  = (symbol_a, symbol_b, start_month, start_day, holding_days, min_return = 12) =>
+  _get("/api/analysis/compare", { symbol_a, symbol_b, start_month, start_day, holding_days, min_return });
+
 export const getSectorRotation   = (universe = "NIFTY500") => _get("/api/analysis/sector-rotation", { universe });
 
 export const getMaeAnalysis      = (symbol, start_month, start_day, holding_days)   =>

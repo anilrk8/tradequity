@@ -2595,10 +2595,11 @@ def main():
             icon="⚠",
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
         ["🎯  Dashboard",
          "📊  Stock Analysis", "🏭  Sector Analysis",
          "🔍  Best Windows",  "📉  Deep Insights",
+         "🆚  Compare",
          "🗄  Data Management"]
     )
 
@@ -2613,6 +2614,8 @@ def main():
     with tab5:
         tab_deep_insights()
     with tab6:
+        tab_compare()
+    with tab7:
         tab_data_management()
 
 

@@ -505,6 +505,313 @@ def get_entry_date_sensitivity(
     }
 
 
+@app.get("/api/analysis/dashboard-summary")
+def get_dashboard_summary(
+    symbol: str,
+    start_month: int = Query(ge=1, le=12),
+    start_day:   int = Query(ge=1, le=31),
+    holding_days: int = Query(ge=5, le=365),
+    min_return:  float = Query(default=12.0),
+):
+    """
+    Run all analyses for one stock / window and return a structured numbered
+    plain-English summary matching the Key Takeaways in the dashboard.
+
+    Response keys:
+      points        : list of {number, text} — the numbered takeaway sentences
+      raw           : underlying numbers for each point (for building UI)
+    """
+    import datetime as _dt
+    import numpy as np
+    import pandas as pd
+
+    month_abbrs = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    name_map    = get_symbol_to_name(UNIVERSE)
+    sym_name    = name_map.get(symbol, symbol)
+    win_label   = f"{month_abbrs[start_month-1]} {start_day} +{holding_days}d"
+
+    # ── Run all analyses ──────────────────────────────────────────────────────
+    res_df, s_sum = seasonal_analysis(symbol, start_month, start_day, holding_days, min_return)
+    bw_df         = best_windows_for_stock(symbol, holding_days, min_return)
+    ev_df, ev_sum = excess_return_vs_nifty(symbol, start_month, start_day, holding_days, min_return)
+    sim_result    = similar_years_analysis(symbol, start_month, start_day, holding_days, 5)
+
+    # Today's VIX from DB
+    today_vix = None
+    try:
+        from src.analyzer import _load_index_closes as _lic
+        from src.db import get_connection as _gc
+        _conn = _gc(); _vdf = _lic("^INDIAVIX", _conn); _conn.close()
+        if not _vdf.empty:
+            today_vix = round(float(_vdf["close"].iloc[-1]), 2)
+    except Exception:
+        pass
+
+    points = []
+    raw    = {}
+
+    # 1. Hit rate
+    if s_sum and "error" not in s_sum:
+        tot    = s_sum["total_instances"]
+        hit_ct = s_sum["target_met_count"]
+        avg_all = s_sum["avg_return_pct"]
+        avg_met = s_sum.get("avg_return_when_met")
+        raw["seasonal"] = {"total": tot, "hit_count": hit_ct,
+                           "avg_all": avg_all, "avg_when_met": avg_met}
+        if avg_met is not None:
+            points.append({
+                "number": 1,
+                "text":   f"Target met **{hit_ct} out of {tot} years** with an average return of "
+                          f"**{avg_met:+.2f}%** when the target was met (avg across all years: **{avg_all:+.2f}%**).",
+            })
+        else:
+            points.append({
+                "number": 1,
+                "text":   f"Target of ≥{min_return:.0f}% was **never met** in this window "
+                          f"across all {tot} years (avg return: **{avg_all:+.2f}%**).",
+            })
+
+    # 2. Days to target
+    if res_df is not None and s_sum and "norm_series_map" in s_sum:
+        norm_map  = s_sum["norm_series_map"]
+        threshold = 100.0 + min_return
+        dtd = []
+        for _, row in res_df.iterrows():
+            yr = row["year"]
+            if not row["target_met"] or yr not in norm_map:
+                continue
+            series  = norm_map[yr].values
+            crossed = [i for i, v in enumerate(series) if v >= threshold]
+            if crossed:
+                dtd.append(crossed[0])
+        if dtd:
+            avg_d = round(sum(dtd) / len(dtd))
+            raw["days_to_target"] = {"avg": avg_d, "min": min(dtd), "max": max(dtd)}
+            points.append({
+                "number": 2,
+                "text":   f"On average, it took **{avg_d} days** to hit the ≥{min_return:.0f}% target "
+                          f"historically whenever the target was met "
+                          f"(fastest: **{min(dtd)}d**, slowest: **{max(dtd)}d**).",
+            })
+
+    # 3. Best entry windows top-3
+    if bw_df is not None and not bw_df.empty:
+        medals = ["🥇", "🥈", "🥉"]
+        cur_abbr = month_abbrs[start_month - 1]
+        top3 = []
+        for i, (_, r) in enumerate(bw_df.head(3).iterrows()):
+            suffix = " ← your entry month" if r["Window"].startswith(cur_abbr) else ""
+            top3.append(f"{medals[i]} {r['Window']} — {r['Target Met (yrs)']} of "
+                        f"{r['Out of (yrs)']} yrs, avg {r['Avg Return %']:+.2f}%{suffix}")
+        cur_rows  = bw_df[bw_df["Window"].str.startswith(cur_abbr)]
+        extra = ""
+        if not cur_rows.empty:
+            cr       = cur_rows.iloc[0]
+            cur_rank = list(bw_df.index).index(cr.name) + 1
+            if cur_rank > 3:
+                extra = (f" (Your month {cur_abbr} ranks #{cur_rank} — "
+                         f"{cr['Target Met (yrs)']} of {cr['Out of (yrs)']} yrs, avg {cr['Avg Return %']:+.2f}%)")
+        raw["best_windows"] = [r for r in _df_to_records(bw_df.head(3))]
+        points.append({
+            "number": 3,
+            "text":   "Best entry windows for this stock:  \n" + "  \n".join(top3) + extra,
+        })
+
+    # 4. Beat NIFTY
+    if ev_sum and ev_sum.get("nifty_available"):
+        avg_exc  = ev_sum.get("avg_excess_return", 0)
+        beat_lbl = ev_sum.get("beat_index_label", "")
+        direction = "outperforms" if (avg_exc or 0) > 0 else "underperforms"
+        raw["nifty"] = {"avg_excess": avg_exc, "beat_label": beat_lbl}
+        points.append({
+            "number": 4,
+            "text":   f"Stock **{direction}** NIFTY in **{beat_lbl}** in this window "
+                      f"(avg excess return: **{avg_exc:+.2f}%**).",
+        })
+
+    # 5. India VIX vs Returns
+    if ev_df is not None and today_vix is not None:
+        vix_data = ev_df.dropna(subset=["vix_at_entry"]).copy()
+        if len(vix_data) >= 2:
+            if today_vix < 14:
+                regime_label  = "Calm (<14)"
+                regime_filter = vix_data["vix_at_entry"] < 14
+            elif today_vix <= 20:
+                regime_label  = "Normal (14–20)"
+                regime_filter = (vix_data["vix_at_entry"] >= 14) & (vix_data["vix_at_entry"] <= 20)
+            else:
+                regime_label  = "Elevated (>20)"
+                regime_filter = vix_data["vix_at_entry"] > 20
+            rd = vix_data[regime_filter]
+            if len(rd) >= 1:
+                rv_avg = round(float(rd["stock_return"].mean()), 2)
+                rv_max = round(float(rd["stock_return"].max()), 2)
+                rv_met = int(rd["target_met"].sum())
+                rv_tot = len(rd)
+                raw["vix_regime"] = {
+                    "today_vix": today_vix, "regime": regime_label,
+                    "avg_return": rv_avg, "max_return": rv_max,
+                    "target_met": rv_met, "total": rv_tot,
+                }
+                points.append({
+                    "number": 5,
+                    "text":   f"India VIX today is **{today_vix}** ({regime_label} regime).  \n"
+                              f"In {regime_label}-VIX years: avg return **{rv_avg:+.2f}%**, "
+                              f"max **{rv_max:+.2f}%**, target met **{rv_met} of {rv_tot} times**.",
+                })
+
+    # 6. Most similar year
+    if sim_result and not sim_result.get("missing_indices"):
+        sim_yrs = sim_result.get("similar_years")
+        if sim_yrs is not None and not sim_yrs.empty:
+            top_sim = sim_yrs.iloc[0]
+            sim_yr  = int(top_sim["Year"])
+            sim_ret = float(top_sim["Final Return %"])
+            raw["similar_year"] = {"year": sim_yr, "return_pct": round(sim_ret, 2)}
+            points.append({
+                "number": 6,
+                "text":   f"Most similar historical year to **{_dt.date.today().year}** is "
+                          f"**{sim_yr}**, when the stock returned **{sim_ret:+.2f}%** in this window.",
+            })
+
+    return {
+        "symbol":    symbol,
+        "sym_name":  sym_name,
+        "win_label": win_label,
+        "points":    points,
+        "raw":       raw,
+    }
+
+
+@app.get("/api/analysis/compare")
+def get_stock_comparison(
+    symbol_a:    str,
+    symbol_b:    str,
+    start_month: int = Query(ge=1, le=12),
+    start_day:   int = Query(ge=1, le=31),
+    holding_days: int = Query(ge=5, le=365),
+    min_return:  float = Query(default=12.0),
+):
+    """
+    Side-by-side seasonal comparison of two stocks for the same window.
+
+    Response:
+      - symbol_a / symbol_b : tickers
+      - name_a / name_b     : friendly names
+      - win_label           : window description
+      - summary_a / summary_b : aggregate stats for each stock
+      - rows_a / rows_b     : per-year trade rows for each stock
+      - overlap_years       : years present in BOTH series
+      - correlation         : Pearson r of returns across overlap years
+      - divergence_years    : years where A met target but B didn't (and vice versa)
+      - days_to_target_a / days_to_target_b : avg/min/max days to first touch target
+      - nifty_a / nifty_b   : beat-NIFTY summary for each stock
+    """
+    import numpy as np
+
+    name_map = get_symbol_to_name(UNIVERSE)
+
+    def _run(sym):
+        df, s = seasonal_analysis(sym, start_month, start_day, holding_days, min_return)
+        ev_df, ev_s = excess_return_vs_nifty(sym, start_month, start_day, holding_days, min_return)
+        norm_map = s.get("norm_series_map", {}) if s else {}
+        threshold = 100.0 + min_return
+        dtd = []
+        if df is not None:
+            for _, row in df.iterrows():
+                yr = row["year"]
+                if not row["target_met"] or yr not in norm_map:
+                    continue
+                series  = norm_map[yr].values
+                crossed = [i for i, v in enumerate(series) if v >= threshold]
+                if crossed:
+                    dtd.append(crossed[0])
+        days_stat = None
+        if dtd:
+            days_stat = {"avg": round(sum(dtd)/len(dtd), 1), "min": min(dtd), "max": max(dtd)}
+        return df, s, ev_s, days_stat
+
+    df_a, s_a, ev_a, dtd_a = _run(symbol_a)
+    df_b, s_b, ev_b, dtd_b = _run(symbol_b)
+
+    if df_a is None and df_b is None:
+        raise HTTPException(status_code=404, detail="No data found for either symbol.")
+
+    def _clean_s(s):
+        if s is None:
+            return None
+        import numpy as np
+        def _cv(v):
+            if isinstance(v, (np.integer,)):  return int(v)
+            if isinstance(v, (np.floating,)): return None if np.isnan(v) else float(v)
+            if isinstance(v, (np.bool_,)):    return bool(v)
+            return v
+        return {k: _cv(v) for k, v in s.items() if k != "norm_series_map"}
+
+    # Overlap years & correlation
+    years_a = set(df_a["year"].tolist()) if df_a is not None else set()
+    years_b = set(df_b["year"].tolist()) if df_b is not None else set()
+    overlap  = sorted(years_a & years_b)
+    correlation = None
+    if len(overlap) >= 3 and df_a is not None and df_b is not None:
+        ra = df_a[df_a["year"].isin(overlap)].set_index("year")["return_pct"]
+        rb = df_b[df_b["year"].isin(overlap)].set_index("year")["return_pct"]
+        ra, rb = ra.align(rb)
+        if len(ra.dropna()) >= 3:
+            correlation = round(float(np.corrcoef(ra.values, rb.values)[0, 1]), 3)
+
+    # Divergence years
+    div_a_wins = []  # A met target, B didn't
+    div_b_wins = []  # B met target, A didn't
+    if df_a is not None and df_b is not None:
+        ma = df_a[df_a["year"].isin(overlap)].set_index("year")["target_met"]
+        mb = df_b[df_b["year"].isin(overlap)].set_index("year")["target_met"]
+        ma, mb = ma.align(mb)
+        for yr in overlap:
+            if ma.get(yr) and not mb.get(yr):
+                div_a_wins.append(yr)
+            elif mb.get(yr) and not ma.get(yr):
+                div_b_wins.append(yr)
+
+    month_abbrs = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    win_label   = f"{month_abbrs[start_month-1]} {start_day} +{holding_days}d"
+
+    def _ev_clean(ev):
+        if ev is None:
+            return None
+        import numpy as np
+        def _cv(v):
+            if isinstance(v, (np.integer,)):  return int(v)
+            if isinstance(v, (np.floating,)): return None if np.isnan(v) else float(v)
+            if isinstance(v, (np.bool_,)):    return bool(v)
+            return v
+        return {k: _cv(v) for k, v in ev.items()}
+
+    rows_a = _df_to_records(df_a.drop(columns=["mae_pct","mfe_pct"], errors="ignore")) if df_a is not None else []
+    rows_b = _df_to_records(df_b.drop(columns=["mae_pct","mfe_pct"], errors="ignore")) if df_b is not None else []
+
+    return {
+        "symbol_a":   symbol_a,
+        "symbol_b":   symbol_b,
+        "name_a":     name_map.get(symbol_a, symbol_a),
+        "name_b":     name_map.get(symbol_b, symbol_b),
+        "win_label":  win_label,
+        "summary_a":  _clean_s(s_a),
+        "summary_b":  _clean_s(s_b),
+        "rows_a":     rows_a,
+        "rows_b":     rows_b,
+        "overlap_years":    overlap,
+        "correlation":      correlation,
+        "div_a_wins":       div_a_wins,
+        "div_b_wins":       div_b_wins,
+        "days_to_target_a": dtd_a,
+        "days_to_target_b": dtd_b,
+        "nifty_a":    _ev_clean(ev_a),
+        "nifty_b":    _ev_clean(ev_b),
+        "min_return": min_return,
+    }
+
+
 # ─── AI Commentary ────────────────────────────────────────────────────────────
 
 class CommentaryRequest(BaseModel):
