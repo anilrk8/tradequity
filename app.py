@@ -2156,6 +2156,23 @@ def tab_dashboard():
                 db_vol = None
                 errors["volume"] = str(e)
 
+            try:
+                db_sim = similar_years_analysis(symbol, sm, sd, holding_days, 5)
+            except Exception as e:
+                db_sim = None
+                errors["similar"] = str(e)
+
+            # Latest India VIX from DB
+            try:
+                from src.db import get_connection as _gc
+                from src.analyzer import _load_index_closes as _lic
+                _conn = _gc()
+                _vix_series = _lic("^INDIAVIX", _conn)
+                _conn.close()
+                today_vix = round(float(_vix_series["close"].iloc[-1]), 2) if not _vix_series.empty else None
+            except Exception:
+                today_vix = None
+
         st.session_state["db_res_df"]  = db_res_df
         st.session_state["db_summary"] = db_summary
         st.session_state["db_bw_df"]   = db_bw_df
@@ -2163,6 +2180,8 @@ def tab_dashboard():
         st.session_state["db_ev_df"]   = db_ev_df
         st.session_state["db_ev_sum"]  = db_ev_sum
         st.session_state["db_vol"]     = db_vol
+        st.session_state["db_sim"]     = db_sim
+        st.session_state["db_today_vix"] = today_vix
         st.session_state["_db_symbol"] = symbol
         st.session_state["_db_sm"]     = sm
         st.session_state["_db_sd"]     = sd
@@ -2180,6 +2199,8 @@ def tab_dashboard():
     db_ev_df     = st.session_state["db_ev_df"]
     db_ev_sum    = st.session_state["db_ev_sum"]
     db_vol       = st.session_state["db_vol"]
+    db_sim       = st.session_state.get("db_sim")
+    today_vix    = st.session_state.get("db_today_vix")
     symbol       = st.session_state["_db_symbol"]
     sm           = st.session_state["_db_sm"]
     sd           = st.session_state["_db_sd"]
@@ -2196,100 +2217,135 @@ def tab_dashboard():
     st.divider()
     st.markdown(f"## {sym_name}  ·  {win_label}  ·  Target ≥{min_return:.0f}%")
 
-    # ── Plain-English Snapshot ────────────────────────────────────────────────
+    # ── Plain-English Snapshot (numbered, match user-readable format) ─────────
     _snap = []
 
     # 1. Seasonal performance
     if db_summary and "error" not in db_summary:
-        _avg  = db_summary.get("avg_return")
-        _best = db_summary.get("best_return")
-        _wrst = db_summary.get("worst_return")
-        _tot  = db_summary.get("total_instances", 0)
-        _hit  = db_summary.get("target_met_label", "—")
-        if _avg is not None:
-            _snap.append(
-                f"📊 **Seasonal Performance** — Hit ≥{min_return:.0f}% target in **{_hit}** "
-                f"across {_tot} completed window(s).  "
-                f"Avg return **{_avg:+.2f}%** | Best year **{_best:+.2f}%** | Worst year **{_wrst:+.2f}%**."
-            )
+        _tot     = db_summary.get("total_instances", 0)
+        _hit_ct  = db_summary.get("target_met_count", 0)
+        _avg_all = db_summary.get("avg_return_pct")
+        _avg_met = db_summary.get("avg_return_when_met")
+        _never   = db_summary.get("target_never_met", False)
         if db_summary.get("low_sample_warning"):
+            _snap.append(f"⚠ **Limited data** — only {_tot} year(s) available; treat results as indicative.")
+        if not _never and _avg_met is not None:
             _snap.append(
-                f"⚠ **Limited data** — only {_tot} year(s) available; treat results as indicative."
+                f"Target met **{_hit_ct} out of {_tot} years** with an average return of "
+                f"**{_avg_met:+.2f}%** when the target was met "
+                f"(avg across all years: **{_avg_all:+.2f}%**)."
+            )
+        elif _never:
+            _snap.append(
+                f"Target of ≥{min_return:.0f}% was **never met** in this window "
+                f"across all {_tot} years.  Avg return: **{_avg_all:+.2f}%**."
             )
 
-    # 2. Best entry window vs current selection
+    # 2. Days to target (computed from norm_map in summary)
+    if db_summary and "error" not in db_summary and db_res_df is not None:
+        _norm_map = db_summary.get("norm_series_map", {})
+        _threshold = 100.0 + min_return
+        _dtd = []
+        for _, _row in db_res_df.iterrows():
+            _yr = _row["year"]
+            if not _row["target_met"] or _yr not in _norm_map:
+                continue
+            _series = _norm_map[_yr].values
+            _crossed = [i for i, v in enumerate(_series) if v >= _threshold]
+            if _crossed:
+                _dtd.append(_crossed[0])
+        if _dtd:
+            _avg_d = round(sum(_dtd) / len(_dtd))
+            _min_d = min(_dtd)
+            _max_d = max(_dtd)
+            _snap.append(
+                f"On average, it took **{_avg_d} days** to hit the ≥{min_return:.0f}% target "
+                f"historically whenever the target was met "
+                f"(fastest: **{_min_d}d**, slowest: **{_max_d}d**)."
+            )
+
+    # 3. Best entry windows (top-3)
     if db_bw_df is not None and not db_bw_df.empty:
-        _top = db_bw_df.iloc[0]
+        _medals = ["🥇", "🥈", "🥉"]
         _cur_abbr = datetime.date(2000, sm, 1).strftime("%b")
+        _top3_parts = []
+        for _i, (_, _r) in enumerate(db_bw_df.head(3).iterrows()):
+            _w = _r["Window"]
+            _suffix = " ← *your entry month*" if _w.startswith(_cur_abbr) else ""
+            _top3_parts.append(
+                f"{_medals[_i]} **{_w}** — {_r['Target Met (yrs)']} of {_r['Out of (yrs)']} yrs"
+                f", avg {_r['Avg Return %']:+.2f}%{_suffix}"
+            )
+        # Check if selected month is not in top 3
         _cur_rows = db_bw_df[db_bw_df["Window"].str.startswith(_cur_abbr)]
-        _best_line = (
-            f"🔍 **Best Entry Window** — Top pick is **{_top['Window']}** "
-            f"({_top['Target Met (yrs)']} of {_top['Out of (yrs)']} yrs hit target, "
-            f"avg {_top['Avg Return %']:+.2f}%)."
-        )
-        if not _cur_rows.empty:
+        _cur_not_in_top3 = _cur_rows.empty or (list(db_bw_df.index).index(_cur_rows.iloc[0].name) + 1 > 3)
+        if not _cur_rows.empty and _cur_not_in_top3:
             _cr = _cur_rows.iloc[0]
             _cur_rank = list(db_bw_df.index).index(_cr.name) + 1
-            _best_line += (
-                f"  Your entry month **{_cur_abbr}** ranks **#{_cur_rank} of {len(db_bw_df)}** "
-                f"({_cr['Target Met (yrs)']} of {_cr['Out of (yrs)']} yrs, avg {_cr['Avg Return %']:+.2f}%)."
+            _top3_parts.append(
+                f"*(Your month **{_cur_abbr}** ranks #{_cur_rank} — "
+                f"{_cr['Target Met (yrs)']} of {_cr['Out of (yrs)']} yrs, avg {_cr['Avg Return %']:+.2f}%)*"
             )
-        _snap.append(_best_line)
+        _snap.append("Best entry windows for this stock:  \n" + "  \n".join(_top3_parts))
 
-    # 3. Monthly rhythm
-    if db_pivot is not None:
-        _m_avg   = db_pivot.mean(axis=0)
-        _best_m  = _m_avg.idxmax()
-        _worst_m = _m_avg.idxmin()
-        _cur_m   = datetime.date(2000, sm, 1).strftime("%b")
-        _cur_mv  = _m_avg.get(_cur_m)
-        _mline   = (
-            f"📅 **Monthly Rhythm** — Strongest calendar month: **{_best_m}** "
-            f"({_m_avg[_best_m]:+.1f}%), weakest: **{_worst_m}** ({_m_avg[_worst_m]:+.1f}%)"
-        )
-        if _cur_mv is not None:
-            _mline += f".  Entry month **{_cur_m}** historically averages **{_cur_mv:+.1f}%**."
-        _snap.append(_mline)
-
-    # 4. Excess vs NIFTY
+    # 4. Beat NIFTY
     if db_ev_sum and db_ev_sum.get("nifty_available"):
         _avg_exc   = db_ev_sum.get("avg_excess_return")
-        _stock_ret = db_ev_sum.get("avg_stock_return")
-        _nifty_ret = db_ev_sum.get("avg_nifty_return")
         _beat_lbl  = db_ev_sum.get("beat_index_label", "")
         _direction = "outperforms" if (_avg_exc or 0) > 0 else "underperforms"
         _snap.append(
-            f"📈 **vs NIFTY** — Stock avg **{_stock_ret:+.2f}%** vs NIFTY **{_nifty_ret:+.2f}%** "
-            f"→ excess return **{_avg_exc:+.2f}%**.  "
-            f"Stock **{_direction}** the index ({_beat_lbl})."
+            f"Stock **{_direction}** NIFTY in **{_beat_lbl}** in this window "
+            f"(avg excess return: **{_avg_exc:+.2f}%**)."
         )
 
-    # 5. Volume
-    if db_vol is not None:
-        _vs        = db_vol["summary"]
-        _conf_ret  = _vs.get("avg_return_vol_confirmed")
-        _unconf_ret = _vs.get("avg_return_unconfirmed")
-        _vline = (
-            f"📦 **Volume** — Entry backed by above-average volume in "
-            f"**{_vs['vol_confirmed_pct']}%** of years "
-            f"({_vs['vol_confirmed_entries']} / {_vs['total_years']})"
-        )
-        if _conf_ret is not None and _unconf_ret is not None:
-            _edge = _conf_ret - _unconf_ret
-            _vline += (
-                f".  High-vol entry avg **{_conf_ret:+.2f}%** vs low-vol **{_unconf_ret:+.2f}%** "
-                f"(volume edge: **{_edge:+.2f}%**)"
+    # 5. India VIX regime at today's level
+    if db_ev_df is not None and today_vix is not None:
+        _vix_data = db_ev_df.dropna(subset=["vix_at_entry"]).copy()
+        if len(_vix_data) >= 2:
+            # Determine today's regime
+            if today_vix < 14:
+                _regime_label = f"Calm (<14)"
+                _regime_filter = _vix_data["vix_at_entry"] < 14
+            elif today_vix <= 20:
+                _regime_label = f"Normal (14–20)"
+                _regime_filter = (_vix_data["vix_at_entry"] >= 14) & (_vix_data["vix_at_entry"] <= 20)
+            else:
+                _regime_label = f"Elevated (>20)"
+                _regime_filter = _vix_data["vix_at_entry"] > 20
+            _regime_data = _vix_data[_regime_filter]
+            if len(_regime_data) >= 1:
+                _rv_avg = round(float(_regime_data["stock_return"].mean()), 2)
+                _rv_max = round(float(_regime_data["stock_return"].max()), 2)
+                _rv_met = int(_regime_data["target_met"].sum())
+                _rv_tot = len(_regime_data)
+                _snap.append(
+                    f"India VIX today is **{today_vix}** ({_regime_label} regime).  \n"
+                    f"In {_regime_label}-VIX years: avg return **{_rv_avg:+.2f}%**, "
+                    f"max **{_rv_max:+.2f}%**, target met **{_rv_met} of {_rv_tot} times**."
+                )
+            else:
+                _snap.append(f"India VIX today is **{today_vix}** — no historical entries at this regime level yet.")
+        elif today_vix is not None:
+            _snap.append(f"India VIX today: **{today_vix}** (insufficient VIX history to segment by regime).")
+    elif today_vix is not None and db_ev_df is None:
+        _snap.append(f"India VIX today: **{today_vix}** — download indices for VIX regime breakdown.")
+
+    # 6. Most similar historical year
+    if db_sim is not None and not db_sim.get("missing_indices", True):
+        _sim_years = db_sim.get("similar_years")
+        if _sim_years is not None and not _sim_years.empty:
+            _top_sim = _sim_years.iloc[0]
+            _sim_yr  = int(_top_sim["Year"])
+            _sim_ret = float(_top_sim["Final Return %"])
+            _snap.append(
+                f"Most similar historical year to **{datetime.date.today().year}** is "
+                f"**{_sim_yr}**, when the stock returned **{_sim_ret:+.2f}%** in this window."
             )
-        if _vs.get("divergence_count", 0) > 0:
-            _vline += f".  ⚠ Price-volume divergence in **{_vs['divergence_count']}** year(s) — weaker-conviction rallies."
-        else:
-            _vline += ".  No price-volume divergence detected."
-        _snap.append(_vline)
 
     if _snap:
         with st.expander("📋 Key Takeaways — Plain-English Summary", expanded=True):
-            for _pt in _snap:
-                st.markdown(f"- {_pt}")
+            for _i, _pt in enumerate(_snap, 1):
+                st.markdown(f"**{_i}.** {_pt}")
 
     # ── Seasonal summary metrics ───────────────────────────────────────────────
     if db_summary and "error" not in db_summary:
