@@ -937,12 +937,11 @@ def trigger_custom_update():
 class AddTickerRequest(BaseModel):
     symbol: str
     name:   str = ""
-    sector: str = "Custom"
 
 
 @app.post("/api/data/add-ticker")
 def add_custom_ticker(req: AddTickerRequest):
-    rows, err = fetch_custom_ticker(req.symbol, req.name, req.sector)
+    rows, err = fetch_custom_ticker(req.symbol, req.name)
     if err:
         raise HTTPException(status_code=400, detail=err)
     return {"rows_fetched": rows, "symbol": req.symbol.strip().upper()}

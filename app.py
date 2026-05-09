@@ -2025,14 +2025,9 @@ def tab_data_management():
     st.caption(
         "Add any stock or index that isn't in the Nifty 500 universe. "
         "Use the Yahoo Finance ticker format: NSE stocks end with **.NS** "
-        "(e.g. `TATAPOWER.NS`, `IRFC.NS`). Once added, the ticker appears in "
-        "all stock dropdowns **and** the sector analysis for its assigned sector."
+        "(e.g. `TATAPOWER.NS`, `IRFC.NS`). Sector is auto-detected from Yahoo Finance. "
+        "Once added, the ticker appears in all stock dropdowns **and** the sector analysis for its sector."
     )
-
-    _KNOWN_SECTORS = sorted({
-        s["sector"] for s in get_stocks(UNIVERSE)
-        if s["sector"] not in ("Custom", "")
-    })
 
     c_ct_left, c_ct_right = st.columns([1, 2])
 
@@ -2047,12 +2042,6 @@ def tab_data_management():
             placeholder="e.g. Tata Power",
             key="ct_name",
         )
-        ct_sector = st.selectbox(
-            "Sector",
-            options=["Custom"] + _KNOWN_SECTORS,
-            key="ct_sector",
-            help="Assign this stock to a sector so it appears in Sector Analysis.",
-        )
         ct_btn = st.button(
             "⬇  Fetch & Add",
             type="primary",
@@ -2063,7 +2052,7 @@ def tab_data_management():
 
         if ct_btn and ct_symbol.strip():
             with st.spinner(f"Fetching {ct_symbol.strip().upper()}…"):
-                rows, err = fetch_custom_ticker(ct_symbol, ct_name, ct_sector)
+                rows, err = fetch_custom_ticker(ct_symbol, ct_name)
             if err:
                 st.error(f"Failed: {err}")
             elif rows == 0:

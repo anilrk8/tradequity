@@ -151,19 +151,11 @@ def bulk_download(
 daily_update = bulk_download
 
 
-def fetch_custom_ticker(symbol: str, name: str, sector: str = "Custom") -> tuple[int, str | None]:
+def fetch_custom_ticker(symbol: str, name: str, sector: str = "") -> tuple[int, str | None]:
     """
     Register and download full OHLCV history for an arbitrary Yahoo Finance ticker.
 
-    Steps:
-      1. Register the symbol in the `stocks` table (universe='CUSTOM').
-      2. Incrementally download OHLCV from START_DATE (or last stored date) to today.
-      3. If the download returns 0 rows (ticker doesn't exist / typo), unregister it
-         and return an error.
-
-    Note: No separate probe call is made — previously a 5-day probe was used for
-    validation but it caused yfinance to cache the short response, resulting in
-    the full history fetch also returning only a handful of rows.
+    Sector is auto-detected from yfinance ticker.info if not provided.
 
     Returns:
         (rows_fetched, error_message)  — error_message is None on success.
@@ -174,9 +166,19 @@ def fetch_custom_ticker(symbol: str, name: str, sector: str = "Custom") -> tuple
 
     conn = get_connection()
     try:
-        # Step 1: register (tentative — removed on failure)
         friendly_name = name.strip() if name.strip() else symbol
-        sector_clean  = sector.strip() if sector.strip() else "Custom"
+
+        # Auto-detect sector from yfinance if not explicitly provided
+        if not sector or sector == "Custom":
+            try:
+                info = yf.Ticker(symbol).info
+                raw_sector = info.get("sector") or info.get("industry") or ""
+                sector_clean = raw_sector.strip() if raw_sector.strip() else "Custom"
+            except Exception:
+                sector_clean = "Custom"
+        else:
+            sector_clean = sector.strip()
+
         conn.execute(
             "INSERT OR REPLACE INTO stocks (symbol, name, sector, universe) "
             "VALUES (?, ?, ?, ?)",
