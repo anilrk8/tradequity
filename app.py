@@ -1227,13 +1227,24 @@ def _render_excess_vs_nifty():
             bins=[0, 14, 20, 100],
             labels=["Calm  (<14)", "Normal  (14–20)", "Elevated  (>20)"],
         )
+        min_ret_ev = st.session_state.get("_res_ev_minret", 0)
+        vix_data["target_met"] = vix_data["stock_return"] >= min_ret_ev
+
+        def _regime_agg(g):
+            return pd.Series({
+                "Years":          len(g),
+                f"Target ≥{min_ret_ev:.0f}% Met": int(g["target_met"].sum()),
+                "Hit Rate %":     round(g["target_met"].mean() * 100, 1),
+                "Avg Return %":   round(g["stock_return"].mean(), 2),
+                "Min %":          round(g["stock_return"].min(), 2),
+                "Max %":          round(g["stock_return"].max(), 2),
+            })
+
         regime_tbl = (
-            vix_data.groupby("vix_regime", observed=True)["stock_return"]
-            .agg(Count="count", Avg_Return="mean", Min="min", Max="max")
-            .round(2)
+            vix_data.groupby("vix_regime", observed=True)
+            .apply(_regime_agg)
         )
-        regime_tbl.columns = ["Count", "Avg Return %", "Min %", "Max %"]
-        st.markdown("**Average outcome by VIX regime at entry**")
+        st.markdown("**Target hit rate & outcomes by VIX regime at entry**")
         st.dataframe(regime_tbl, use_container_width=True)
 
 
