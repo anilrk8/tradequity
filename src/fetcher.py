@@ -280,6 +280,24 @@ def autofix_custom_sectors(
         conn.close()
 
 
+def set_custom_ticker_sectors(updates: dict[str, str]) -> None:
+    """
+    Manually update the sector for one or more CUSTOM tickers.
+    updates: {symbol: sector_name}
+    """
+    conn = get_connection()
+    try:
+        for symbol, sector in updates.items():
+            sector_clean = sector.strip() if sector.strip() else "Custom"
+            conn.execute(
+                "UPDATE stocks SET sector = ? WHERE symbol = ? AND universe = 'CUSTOM'",
+                (sector_clean, symbol),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def update_custom_tickers(
     progress_callback: Callable[[int, int, str, int, str], None] | None = None,
 ) -> None:

@@ -26,6 +26,7 @@ from src.fetcher import (
     bulk_download, get_data_status, has_any_data,
     fetch_indices, get_index_status, has_index_data, INDEX_TICKERS,
     fetch_custom_ticker, get_custom_tickers, update_custom_tickers, autofix_custom_sectors,
+    set_custom_ticker_sectors,
 )
 from src.universe import get_sectors, get_stocks, get_symbol_to_name
 from src.db import init_db
@@ -2107,6 +2108,44 @@ def tab_data_management():
                         st.success(f"Updated {len(updated)} ticker(s): {', '.join(updated.keys())}. Refresh the page to see changes.")
                     else:
                         st.warning("No sectors could be auto-detected — Yahoo Finance may not have sector data for these tickers.")
+
+            # ── Manual sector edit for still-unresolved tickers ────────────
+            unresolved = [c for c in custom_list if c["sector"] == "Custom"]
+            if unresolved:
+                st.divider()
+                st.markdown("##### Manually assign sectors (still tagged 'Custom')")
+                known_sectors = sorted({
+                    s["sector"] for s in get_stocks(UNIVERSE)
+                    if s["sector"] not in ("Custom", "")
+                })
+                sector_options = known_sectors + ["Custom"]
+                edit_df = pd.DataFrame(unresolved)[["symbol", "name", "sector"]].rename(
+                    columns={"symbol": "Ticker", "name": "Name", "sector": "Sector"}
+                )
+                edited = st.data_editor(
+                    edit_df,
+                    column_config={
+                        "Ticker": st.column_config.TextColumn(disabled=True),
+                        "Name":   st.column_config.TextColumn(disabled=True),
+                        "Sector": st.column_config.SelectboxColumn(
+                            options=sector_options, required=True
+                        ),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="ct_manual_sector_editor",
+                )
+                if st.button("💾  Save Manual Sectors", key="ct_save_sectors"):
+                    changes = {
+                        row["Ticker"]: row["Sector"]
+                        for _, row in edited.iterrows()
+                        if row["Sector"] != "Custom"
+                    }
+                    if changes:
+                        set_custom_ticker_sectors(changes)
+                        st.success(f"Saved sectors for: {', '.join(changes.keys())}. Refresh to update.")
+                    else:
+                        st.info("No changes — all selected sectors are still 'Custom'.")
             if ct_update_btn:
                 ct_prog = st.progress(0.0, text="Updating custom tickers…")
                 ct_log_lines: list[str] = []
